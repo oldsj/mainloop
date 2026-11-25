@@ -46,6 +46,9 @@ type DevicesAPI struct {
 	// OnRevoke is told of each revocation, to end the device's open requests in this process
 	// (auth.Devices.Revoked). Other processes notice within a few seconds on their own.
 	OnRevoke func(id string)
+	// OnSessionsEnded is told when a device's web sessions end or are replaced, to end the requests
+	// they hold open in this process (auth.Devices.SessionsEnded). Others notice on their recheck.
+	OnSessionsEnded func(id string)
 }
 
 func (a *DevicesAPI) now() time.Time {
@@ -90,10 +93,26 @@ func (s *Store) UseToken(ctx context.Context, id, jti string, until time.Time) (
 	return n == 1, err
 }
 
-// PruneTokenUses implements auth.DeviceStore.
+// PruneTokenUses implements auth.DeviceStore: used tokens and web sessions past their expiry.
 func (s *Store) PruneTokenUses(ctx context.Context) error {
-	_, err := dbq.New(s.Pool).PruneDeviceTokenUses(ctx)
+	q := dbq.New(s.Pool)
+	if _, err := q.PruneDeviceTokenUses(ctx); err != nil {
+		return err
+	}
+	_, err := q.PruneDeviceWebSessions(ctx)
 	return err
+}
+
+// WebSession implements auth.DeviceStore.
+func (s *Store) WebSession(ctx context.Context, tokenHash []byte) (string, time.Time, error) {
+	row, err := dbq.New(s.Pool).GetDeviceWebSession(ctx, tokenHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", time.Time{}, auth.ErrUnknownSession
+	}
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	return row.DeviceID, row.ExpiresAt, nil
 }
 
 // PublicKey decodes JWK coordinates into a P-256 key, refusing a point that is not on the curve.
@@ -134,9 +153,18 @@ func (a *DevicesAPI) ready() error {
 	return nil
 }
 
-// current is the device that signed this request, if one did.
+// current is the device this request acts as, signed or through its web session, if any.
 func current(ctx context.Context) string {
 	if p, ok := auth.FromContext(ctx); ok && p.Kind == auth.KindDevice {
+		return p.Name
+	}
+	return ""
+}
+
+// signed is the device whose key signed this request, if one did; never a web session. Push and
+// web sessions are the app's own business, not the page's.
+func signed(ctx context.Context) string {
+	if p, ok := auth.FromContext(ctx); ok && p.Kind == auth.KindDevice && p.Via == "device" {
 		return p.Name
 	}
 	return ""
@@ -304,6 +332,11 @@ func (a *DevicesAPI) AnswerRegistration(ctx context.Context, tx pgx.Tx, sourceID
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
+		if err == nil {
+			if _, err := dbq.New(tx).EndDeviceWebSessions(ctx, id); err != nil {
+				return err
+			}
+		}
 		if a.OnRevoke != nil {
 			a.OnRevoke(id)
 		}
@@ -356,9 +389,9 @@ func (a *DevicesAPI) SetDevicePush(ctx context.Context, r api.SetDevicePushReque
 	if err := a.ready(); err != nil {
 		return nil, err
 	}
-	id := current(ctx)
+	id := signed(ctx)
 	if id == "" {
-		return api.SetDevicePush403JSONResponse{Detail: "Only a registered device can set its push token"}, nil
+		return api.SetDevicePush403JSONResponse{Detail: "Only a request signed with a registered device's key can set its push token"}, nil
 	}
 	if r.Body == nil || !apnsToken.MatchString(r.Body.Token) {
 		return nil, apierr.Invalid("token must be the APNs device token in lower-case hex")
@@ -399,9 +432,9 @@ func (a *DevicesAPI) ClearDevicePush(ctx context.Context, _ api.ClearDevicePushR
 	if err := a.ready(); err != nil {
 		return nil, err
 	}
-	id := current(ctx)
+	id := signed(ctx)
 	if id == "" {
-		return api.ClearDevicePush403JSONResponse{Detail: "Only a registered device can clear its push token"}, nil
+		return api.ClearDevicePush403JSONResponse{Detail: "Only a request signed with a registered device's key can clear its push token"}, nil
 	}
 	if _, found, err := a.currentDevice(ctx, id); err != nil || !found {
 		if err != nil {
@@ -436,6 +469,9 @@ func (a *DevicesAPI) RevokeDevice(ctx context.Context, r api.RevokeDeviceRequest
 		if _, err := q.RevokeOwnerDevice(ctx, dbq.RevokeOwnerDeviceParams{ID: r.DeviceId, OwnerID: a.OwnerID}); err != nil {
 			return err
 		}
+		if _, err := q.EndDeviceWebSessions(ctx, r.DeviceId); err != nil {
+			return err
+		}
 		return q.ClearDevicePushToken(ctx, r.DeviceId)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -448,4 +484,67 @@ func (a *DevicesAPI) RevokeDevice(ctx context.Context, r api.RevokeDeviceRequest
 		a.OnRevoke(r.DeviceId)
 	}
 	return api.RevokeDevice204Response{}, nil
+}
+
+// CreateDeviceWebSession implements api.StrictServerInterface: a request the device key signed
+// trades for a web session the iPhone app's web view sends as a cookie (docs/specs/devices.md,
+// "The app's web view"). Never from a web session (a page can't extend its own session) or a
+// sign-in. The token is returned once and only its SHA-256 is kept.
+func (a *DevicesAPI) CreateDeviceWebSession(ctx context.Context, _ api.CreateDeviceWebSessionRequestObject) (api.CreateDeviceWebSessionResponseObject, error) {
+	if err := a.ready(); err != nil {
+		return nil, err
+	}
+	id := signed(ctx)
+	if id == "" {
+		return api.CreateDeviceWebSession403JSONResponse{Detail: "Only a request signed with a registered device's key can start a web session"}, nil
+	}
+	if _, found, err := a.currentDevice(ctx, id); err != nil || !found {
+		if err != nil {
+			return nil, err
+		}
+		return api.CreateDeviceWebSession403JSONResponse{Detail: "Device not found"}, nil
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return nil, err
+	}
+	token := base64.RawURLEncoding.EncodeToString(b)
+	sum := sha256.Sum256([]byte(token))
+	expires := a.now().Add(auth.DeviceSessionLife).UTC().Truncate(time.Microsecond)
+	// One session per device: the new one ends the earlier ones in the same transaction.
+	err := pgx.BeginFunc(ctx, a.Pool, func(tx pgx.Tx) error {
+		q := dbq.New(tx)
+		if _, err := q.EndDeviceWebSessions(ctx, id); err != nil {
+			return err
+		}
+		return q.InsertDeviceWebSession(ctx, dbq.InsertDeviceWebSessionParams{TokenHash: sum[:], DeviceID: id, ExpiresAt: expires})
+	})
+	if err != nil {
+		return nil, err
+	}
+	a.sessionsEnded(id)
+	return api.CreateDeviceWebSession201JSONResponse{CookieName: auth.DeviceSessionCookie, Token: token, ExpiresAt: expires}, nil
+}
+
+// EndDeviceWebSessions implements api.StrictServerInterface: the app ends its device's web
+// sessions, as on sign-out. Only a request the device key signed, never a web session.
+func (a *DevicesAPI) EndDeviceWebSessions(ctx context.Context, _ api.EndDeviceWebSessionsRequestObject) (api.EndDeviceWebSessionsResponseObject, error) {
+	if err := a.ready(); err != nil {
+		return nil, err
+	}
+	id := signed(ctx)
+	if id == "" {
+		return api.EndDeviceWebSessions403JSONResponse{Detail: "Only a request signed with a registered device's key can end its web sessions"}, nil
+	}
+	if _, err := dbq.New(a.Pool).EndDeviceWebSessions(ctx, id); err != nil {
+		return nil, err
+	}
+	a.sessionsEnded(id)
+	return api.EndDeviceWebSessions204Response{}, nil
+}
+
+func (a *DevicesAPI) sessionsEnded(id string) {
+	if a.OnSessionsEnded != nil {
+		a.OnSessionsEnded(id)
+	}
 }

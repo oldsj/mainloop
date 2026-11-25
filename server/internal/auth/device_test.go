@@ -186,7 +186,7 @@ func TestRevocationEndsOpenRequests(t *testing.T) {
 	d := &auth.Devices{Store: store, MaxBody: 1 << 20, Audience: authtest.DeviceOrigin, RecheckEvery: 10 * time.Millisecond}
 
 	// Revoked here: Revoked ends it at once.
-	ctx, stop := d.Watch(context.Background(), phoneID)
+	ctx, stop := d.Watch(context.Background(), auth.Principal{Kind: auth.KindDevice, Name: phoneID, Via: "device"})
 	defer stop()
 	d.Revoked(phoneID)
 	select {
@@ -198,7 +198,7 @@ func TestRevocationEndsOpenRequests(t *testing.T) {
 	// Revoked by another process: the recheck ends it.
 	other := authtest.NewDevice(t, otherID)
 	store.Add(other)
-	ctx2, stop2 := d.Watch(context.Background(), otherID)
+	ctx2, stop2 := d.Watch(context.Background(), auth.Principal{Kind: auth.KindDevice, Name: otherID, Via: "device"})
 	defer stop2()
 	store.Revoke(otherID)
 	select {
@@ -234,4 +234,123 @@ func TestTheAppsAudienceNeedsToBeConfigured(t *testing.T) {
 	if _, err := o.Verify(context.Background(), tok); err == nil {
 		t.Fatal("a token for the app's client verified without MAINLOOP_AUTH_DEVICE_CLIENT_ID")
 	}
+}
+
+// Given the iPhone app's web view, which sends its device's web session as a cookie, then the
+// request acts as that device (via "session") with the device's limits, and a session that is
+// unknown, expired (the store no longer finds it) or whose device was revoked is refused.
+func TestADeviceWebSession(t *testing.T) {
+	f := newFixture(t, auth.ModeEnforce)
+	phone := authtest.NewDevice(t, phoneID)
+	f.devices.Add(phone)
+	const session = "c2Vzc2lvbi10b2tlbi1mb3ItdGhlLXRlc3RzLW9ubHktMDAwMDA"
+	f.devices.AddSession(session, phoneID, time.Now().Add(time.Hour))
+	web := map[string]string{auth.ClientHeader: "web", "Origin": "https://mainloop.test"}
+
+	cases := []struct {
+		name string
+		req  req
+		want int // 0: passed as the device's session
+	}{
+		{"reads", req{method: "GET", path: "/attention", deviceCookie: session}, 0},
+		{"writes from the app's own origin", req{method: "POST", path: "/sessions", deviceCookie: session, headers: web}, 0},
+		{"write without the client header", req{method: "POST", path: "/sessions", deviceCookie: session}, 403},
+		{"write from another origin", req{method: "POST", path: "/sessions", deviceCookie: session, headers: map[string]string{auth.ClientHeader: "web", "Origin": "https://evil.test"}}, 403},
+		{"unknown or expired session", req{method: "GET", path: "/attention", deviceCookie: strings.Repeat("x", 43)}, 401},
+		{"malformed session", req{method: "GET", path: "/attention", deviceCookie: "short"}, 401},
+		{"may not register a device", req{method: "POST", path: "/devices", deviceCookie: session, headers: web}, 403},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := f.do(c.req)
+			if c.want == 0 {
+				if !f.called || f.seen == nil || f.seen.Kind != auth.KindDevice || f.seen.Name != phoneID || f.seen.Via != "session" {
+					t.Fatalf("status %d, principal %+v; logs:\n%s", w.Code, f.seen, f.logs)
+				}
+				return
+			}
+			if f.called || w.Code != c.want {
+				t.Fatalf("status = %d (passed=%v), want %d; logs:\n%s", w.Code, f.called, c.want, f.logs)
+			}
+		})
+	}
+
+	// A signed request wins over the cookie, as a bearer wins over the login cookie.
+	if f.do(req{method: "GET", path: "/attention", bearer: phone.Token(t, "GET", "/attention", body, nil), deviceCookie: session}); !f.called || f.seen.Via != "device" {
+		t.Fatalf("bearer and cookie: principal %+v", f.seen)
+	}
+
+	// A planted or stale device cookie never hides the owner's login, so it can't lock a browser
+	// out; a valid one still acts as its device.
+	owner := f.owner(t, nil)
+	stale := strings.Repeat("x", 43)
+	if f.do(req{method: "GET", path: "/attention", deviceCookie: stale, cookie: owner}); !f.called || f.seen.Kind != auth.KindOwner || f.seen.Via != "cookie" {
+		t.Fatalf("stale device cookie and the login: principal %+v; logs:\n%s", f.seen, f.logs)
+	}
+	if f.do(req{method: "GET", path: "/attention", deviceCookie: session, cookie: owner}); !f.called || f.seen.Via != "session" {
+		t.Fatalf("live device cookie and the login: principal %+v", f.seen)
+	}
+
+	f.devices.Revoke(phoneID)
+	if w := f.do(req{method: "GET", path: "/attention", deviceCookie: session}); f.called || w.Code != 401 {
+		t.Fatalf("after revocation: status %d, passed=%v", w.Code, f.called)
+	}
+}
+
+func TestTheCookieIsHostOnly(t *testing.T) {
+	// A browser takes a __Host- cookie only when it is Secure, on path / and has no Domain, so a
+	// sibling host can't set one for the app's host.
+	if !strings.HasPrefix(auth.DeviceSessionCookie, "__Host-") {
+		t.Fatalf("cookie %q has no __Host- prefix", auth.DeviceSessionCookie)
+	}
+	if auth.DeviceSessionLife > time.Hour {
+		t.Fatalf("a web session lasts %s; the app renews it, so keep it short", auth.DeviceSessionLife)
+	}
+}
+
+func TestAWebSessionsStreamsEndWithIt(t *testing.T) {
+	store := &authtest.DeviceStore{}
+	store.Add(authtest.NewDevice(t, phoneID))
+	d := &auth.Devices{Store: store, MaxBody: 1 << 20, Audience: authtest.DeviceOrigin, RecheckEvery: 10 * time.Millisecond}
+	session := func(token string, life time.Duration) auth.Principal {
+		t.Helper()
+		store.AddSession(token, phoneID, time.Now().Add(life))
+		r := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "https://mainloop.test/events", nil)
+		p, err := d.Session(r, token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return *p
+	}
+	ended := func(ctx context.Context, what string) {
+		t.Helper()
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Second):
+			t.Fatalf("a stream stayed open after %s", what)
+		}
+	}
+	signed := auth.Principal{Kind: auth.KindDevice, Name: phoneID, Via: "device"}
+
+	// Expiry: the deadline ends it.
+	ctx, stop := d.Watch(context.Background(), session(strings.Repeat("a", 43), 50*time.Millisecond))
+	defer stop()
+	ended(ctx, "its session expired")
+
+	// Ended here (a new session, or the app ended them): at once, and the signed stream stays.
+	sctx, sstop := d.Watch(context.Background(), signed)
+	defer sstop()
+	ctx, stop = d.Watch(context.Background(), session(strings.Repeat("b", 43), time.Hour))
+	defer stop()
+	d.SessionsEnded(phoneID)
+	ended(ctx, "its sessions were ended here")
+	if sctx.Err() != nil {
+		t.Fatal("ending the web sessions ended a signed request")
+	}
+
+	// Ended by another process: the recheck ends it.
+	ctx, stop = d.Watch(context.Background(), session(strings.Repeat("c", 43), time.Hour))
+	defer stop()
+	store.EndSessions(phoneID)
+	ended(ctx, "its sessions were ended elsewhere")
 }

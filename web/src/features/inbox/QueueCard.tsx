@@ -1,17 +1,19 @@
 import { FileText, Bell, CircleQuestionMark, TriangleAlert, type LucideIcon } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { approveInNativeShell, inNativeShell } from '@/lib/nativeShell';
 import {
   ageLabel,
   messageOf,
   prLink,
   priorityBorder,
+  privilegedActionId,
   privilegedDigest,
   responseMetadata,
   takesTextReply,
   type QueueItem
 } from './model';
-import { useRespondToQueueItem } from './queries';
+import { useApprovedInNativeShell, useRespondToQueueItem } from './queries';
 
 const TYPE_ICONS: Partial<Record<QueueItem['item_type'], LucideIcon>> = {
   plan_review: FileText,
@@ -22,6 +24,8 @@ const TYPE_ICONS: Partial<Record<QueueItem['item_type'], LucideIcon>> = {
 /**
  * A queue item that is not a live HITL request: a question, a plan to review or an approval. Answers
  * go to `POST /queue/{id}/respond`; Approve on a privileged-action card carries the card's digest.
+ * In the iPhone app, Approve on a privileged-action card goes to the app instead, which shows its own
+ * sheet, asks for Touch ID and sends the signed answer (a phone's unsigned Approve is refused).
  * Input notices are dismissed from Activity, not here.
  */
 export function QueueCard({ item }: { item: QueueItem }) {
@@ -29,12 +33,31 @@ export function QueueCard({ item }: { item: QueueItem }) {
   const [draft, setDraft] = useState('');
   const [sent, setSent] = useState<string | null>(null);
   const respond = useRespondToQueueItem();
+  const approved = useApprovedInNativeShell();
+  const [native, setNative] = useState<{ pending: boolean; error: string | null }>({
+    pending: false,
+    error: null
+  });
 
   const Icon = TYPE_ICONS[item.item_type] ?? Bell;
   const pr = prLink(item);
   const answer = item.response ?? sent;
   const awaitingAnswer = item.status === 'pending' && !sent;
   const options = awaitingAnswer ? (item.options ?? []) : [];
+
+  const digest = privilegedDigest(item);
+  const actionId = privilegedActionId(item);
+  const nativeApprove = digest !== null && actionId !== null && inNativeShell();
+  const busy = respond.isPending || native.pending;
+
+  const approveNatively = async () => {
+    if (!digest || !actionId) return;
+    setNative({ pending: true, error: null });
+    const result = await approveInNativeShell({ itemId: item.id, actionId, digest });
+    setNative({ pending: false, error: result.status === 'failed' ? result.message : null });
+    if (result.status === 'approved') setSent('Approve');
+    approved();
+  };
 
   const send = (response: string, onSent?: () => void) =>
     respond.mutate(
@@ -103,8 +126,10 @@ export function QueueCard({ item }: { item: QueueItem }) {
               key={option}
               variant="outline"
               size="sm"
-              disabled={respond.isPending}
-              onClick={() => send(option)}
+              disabled={busy}
+              onClick={() =>
+                nativeApprove && option === 'Approve' ? void approveNatively() : send(option)
+              }
             >
               {option}
             </Button>
@@ -135,21 +160,22 @@ export function QueueCard({ item }: { item: QueueItem }) {
                   ? 'Request changes...'
                   : 'Type your response...'
             }
-            disabled={respond.isPending}
+            disabled={busy}
             className="border-input bg-background text-foreground placeholder:text-muted-foreground focus-visible:border-ring min-h-control min-w-0 flex-1 border px-3 text-sm focus-visible:outline-none disabled:opacity-50"
           />
-          <Button
-            type="submit"
-            variant="outline"
-            size="sm"
-            disabled={!draft.trim() || respond.isPending}
-          >
+          <Button type="submit" variant="outline" size="sm" disabled={!draft.trim() || busy}>
             Send
           </Button>
         </form>
       ) : null}
 
       {answer ? <p className="text-muted-foreground text-sm break-words">&gt; {answer}</p> : null}
+
+      {native.error ? (
+        <p role="alert" className="text-destructive text-sm">
+          {native.error}
+        </p>
+      ) : null}
 
       {respond.isError ? (
         <p role="alert" className="text-destructive text-sm">

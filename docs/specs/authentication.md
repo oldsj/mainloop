@@ -67,6 +67,13 @@ bound to one request's method, path and body, at most 60 seconds long and good o
 against the registered, unrevoked devices on every request. Device tokens are refused when
 `serve-api` has no database. See [devices](devices.md).
 
+**A device's web session.** The `__Host-mainloop-device` cookie, which the iPhone app's web view
+sends (see [devices](devices.md#the-apps-web-view)). It acts as its device, with a device's
+limits, and is read after a bearer and before the login cookie. An unknown, expired or ended
+session, or one whose device was revoked, is refused (`401`), unless the request also carries the
+login cookie: then the login decides, so a device cookie planted in a browser can't lock the owner
+out.
+
 **A ServiceAccount.** A projected token issued for `MAINLOOP_AUTH_SA_AUDIENCE` (default
 `mainloop-api`). The backend checks it with a TokenReview, which also refuses a token whose pod is
 gone. This needs `create` on `tokenreviews` (`system:auth-delegator`), and works only in the cluster.

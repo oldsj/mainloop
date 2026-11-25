@@ -45,6 +45,20 @@ var DeviceIDPattern = regexp.MustCompile(`^dev_[a-z0-9]{26}$`)
 // ErrUnknownDevice is returned by a DeviceStore for an id it has no device for.
 var ErrUnknownDevice = errors.New("unknown device")
 
+// ErrUnknownSession is returned by a DeviceStore for a web session it has none for, or one that
+// has expired.
+var ErrUnknownSession = errors.New("unknown or expired session")
+
+// DeviceSessionCookie names the cookie the iPhone app's web view sends: a device's web session
+// (docs/specs/devices.md, "The app's web view"). The app sets it HttpOnly, so the page can't read it.
+// The __Host- prefix makes a browser refuse it unless it is Secure, host-only and on path /, so a
+// page on a sibling host (a workspace preview) can't plant one for the app's host.
+const DeviceSessionCookie = "__Host-mainloop-device"
+
+// DeviceSessionLife is how long a web session lasts. The app starts a new one each time it comes
+// to the foreground and before this runs out; a new session ends the device's earlier ones.
+const DeviceSessionLife = time.Hour
+
 // DeviceRecord is what the verifier needs about a registered device.
 type DeviceRecord struct {
 	Key     *ecdsa.PublicKey
@@ -61,8 +75,11 @@ type DeviceStore interface {
 	// UseToken records a write's token until it expires: false when it was used before, by this
 	// process or another.
 	UseToken(ctx context.Context, id, jti string, until time.Time) (bool, error)
-	// PruneTokenUses forgets used tokens past their expiry.
+	// PruneTokenUses forgets used tokens and web sessions past their expiry.
 	PruneTokenUses(ctx context.Context) error
+	// WebSession returns the device of the web session whose token has this SHA-256, or
+	// ErrUnknownSession when there is none or it has expired.
+	WebSession(ctx context.Context, tokenHash []byte) (deviceID string, expires time.Time, err error)
 }
 
 // Devices verifies device request tokens.
@@ -83,7 +100,7 @@ type Devices struct {
 	used    map[string]time.Time // kid|jti → when the entry may be forgotten
 	touched map[string]time.Time // device id → last Touch
 	pruned  time.Time
-	open    map[string]map[*context.CancelFunc]struct{} // device id → its open requests
+	open    map[string]map[*context.CancelFunc]bool // device id → its open requests (true: a web session's)
 }
 
 // deviceClaims are a device token's claims.
@@ -169,24 +186,60 @@ func (d *Devices) Verify(r *http.Request, raw string) (string, error) {
 	return kid, nil
 }
 
+// Session checks a web session token from the DeviceSessionCookie and returns the principal it
+// acts as: its device, via "session", until the session expires. A revoked device's sessions are
+// refused on the next request.
+func (d *Devices) Session(r *http.Request, token string) (*Principal, error) {
+	if len(token) < 32 || len(token) > 128 {
+		return nil, errors.New("device session: malformed")
+	}
+	sum := sha256.Sum256([]byte(token))
+	id, expires, err := d.Store.WebSession(r.Context(), sum[:])
+	if err != nil {
+		return nil, fmt.Errorf("device session: %w", err)
+	}
+	rec, err := d.Store.Device(r.Context(), id)
+	if err != nil {
+		return nil, fmt.Errorf("device session: %w", err)
+	}
+	if rec.Revoked {
+		return nil, errors.New("device session: device revoked")
+	}
+	d.touch(r.Context(), id, d.now())
+	return &Principal{
+		Kind: KindDevice, Name: id, Scope: ScopeOwner, Via: "session",
+		sessionHash: string(sum[:]), sessionUntil: expires,
+	}, nil
+}
+
 func safeMethod(m string) bool {
 	return m == http.MethodGet || m == http.MethodHead || m == http.MethodOptions
 }
 
 // Watch returns ctx for a device's request, cancelled when the device is revoked: at once when
 // this process revokes it (Revoked), otherwise within deviceRecheckEvery, so an open stream does
-// not outlive the device. Call stop when the request ends.
-func (d *Devices) Watch(ctx context.Context, id string) (context.Context, func()) {
+// not outlive the device. A web session's request also ends when the session expires, and when it
+// is ended or replaced (at once in this process, SessionsEnded; otherwise on the recheck). Call
+// stop when the request ends.
+func (d *Devices) Watch(ctx context.Context, p Principal) (context.Context, func()) {
+	id := p.Name
+	session := p.sessionHash != ""
 	ctx, cancel := context.WithCancel(ctx)
+	if session {
+		var stopTimer context.CancelFunc
+		ctx, stopTimer = context.WithDeadline(ctx, p.sessionUntil)
+		inner := cancel
+		cancel = func() { stopTimer(); inner() }
+	}
 	d.mu.Lock()
 	if d.open == nil {
-		d.open = map[string]map[*context.CancelFunc]struct{}{}
+		d.open = map[string]map[*context.CancelFunc]bool{}
 	}
 	if d.open[id] == nil {
-		d.open[id] = map[*context.CancelFunc]struct{}{}
+		d.open[id] = map[*context.CancelFunc]bool{}
 	}
 	key := &cancel
-	d.open[id][key] = struct{}{}
+	d.open[id][key] = session
 	d.mu.Unlock()
 	go func() {
 		every := d.RecheckEvery
@@ -205,6 +258,12 @@ func (d *Devices) Watch(ctx context.Context, id string) (context.Context, func()
 					cancel()
 					return
 				}
+				if session {
+					if _, _, err := d.Store.WebSession(context.WithoutCancel(ctx), []byte(p.sessionHash)); errors.Is(err, ErrUnknownSession) {
+						cancel()
+						return
+					}
+				}
 			}
 		}
 	}()
@@ -220,11 +279,19 @@ func (d *Devices) Watch(ctx context.Context, id string) (context.Context, func()
 }
 
 // Revoked ends the device's requests open in this process.
-func (d *Devices) Revoked(id string) {
+func (d *Devices) Revoked(id string) { d.end(id, false) }
+
+// SessionsEnded ends the requests open in this process with the device's web sessions, after they
+// were ended or replaced. Its signed requests stay open.
+func (d *Devices) SessionsEnded(id string) { d.end(id, true) }
+
+func (d *Devices) end(id string, sessionsOnly bool) {
 	d.mu.Lock()
 	cancels := make([]context.CancelFunc, 0, len(d.open[id]))
-	for c := range d.open[id] {
-		cancels = append(cancels, *c)
+	for c, session := range d.open[id] {
+		if session || !sessionsOnly {
+			cancels = append(cancels, *c)
+		}
 	}
 	d.mu.Unlock()
 	for _, c := range cancels {

@@ -10,6 +10,36 @@ import (
 	"time"
 )
 
+const endDeviceWebSessions = `-- name: EndDeviceWebSessions :execrows
+DELETE FROM device_web_sessions WHERE device_id = $1
+`
+
+// Ends every web session of a device: before a new one starts, when it signs out, when it is revoked.
+func (q *Queries) EndDeviceWebSessions(ctx context.Context, deviceID string) (int64, error) {
+	result, err := q.db.Exec(ctx, endDeviceWebSessions, deviceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getDeviceWebSession = `-- name: GetDeviceWebSession :one
+SELECT device_id, expires_at FROM device_web_sessions WHERE token_hash = $1 AND expires_at > now()
+`
+
+type GetDeviceWebSessionRow struct {
+	DeviceID  string
+	ExpiresAt time.Time
+}
+
+// The device of a web session that has not expired.
+func (q *Queries) GetDeviceWebSession(ctx context.Context, tokenHash []byte) (GetDeviceWebSessionRow, error) {
+	row := q.db.QueryRow(ctx, getDeviceWebSession, tokenHash)
+	var i GetDeviceWebSessionRow
+	err := row.Scan(&i.DeviceID, &i.ExpiresAt)
+	return i, err
+}
+
 const getOwnerDevice = `-- name: GetOwnerDevice :one
 SELECT id, owner_id, name, platform, request_key_x, request_key_y, key_thumbprint, registered_by, registration_jti, registration_auth_time, created_at, last_seen_at, revoked_at, approval_key_x, approval_key_y, approval_key_thumbprint FROM owner_devices WHERE id = $1
 `
@@ -36,6 +66,21 @@ func (q *Queries) GetOwnerDevice(ctx context.Context, id string) (OwnerDevice, e
 		&i.ApprovalKeyThumbprint,
 	)
 	return i, err
+}
+
+const insertDeviceWebSession = `-- name: InsertDeviceWebSession :exec
+INSERT INTO device_web_sessions (token_hash, device_id, expires_at) VALUES ($1, $2, $3)
+`
+
+type InsertDeviceWebSessionParams struct {
+	TokenHash []byte
+	DeviceID  string
+	ExpiresAt time.Time
+}
+
+func (q *Queries) InsertDeviceWebSession(ctx context.Context, arg InsertDeviceWebSessionParams) error {
+	_, err := q.db.Exec(ctx, insertDeviceWebSession, arg.TokenHash, arg.DeviceID, arg.ExpiresAt)
+	return err
 }
 
 const insertOwnerDevice = `-- name: InsertOwnerDevice :one
@@ -150,6 +195,18 @@ DELETE FROM device_token_uses WHERE expires_at < now()
 // A used token past its expiry is refused for that reason alone.
 func (q *Queries) PruneDeviceTokenUses(ctx context.Context) (int64, error) {
 	result, err := q.db.Exec(ctx, pruneDeviceTokenUses)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const pruneDeviceWebSessions = `-- name: PruneDeviceWebSessions :execrows
+DELETE FROM device_web_sessions WHERE expires_at < now()
+`
+
+func (q *Queries) PruneDeviceWebSessions(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneDeviceWebSessions)
 	if err != nil {
 		return 0, err
 	}

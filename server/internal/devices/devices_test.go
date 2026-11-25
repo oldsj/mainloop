@@ -2,6 +2,7 @@ package devices_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -479,5 +480,130 @@ func TestARegistrationCarriesTheApprovalKey(t *testing.T) {
 	if _, err := db.Pool.Exec(context.Background(), `UPDATE owner_devices SET approval_key_x = $2, approval_key_y = $3, approval_key_thumbprint = $4 WHERE id = $1`,
 		plain.Id, bx, by, devices.Thumbprint(bx, by)); err == nil {
 		t.Fatal("an approval key was added after registration")
+	}
+}
+
+// Given a registered phone, when it signs a request for a web session, then it gets a token once,
+// the store finds the session by the token's hash (never the token), and the session ends when it
+// expires or the device is revoked. A web session, a sign-in or an unsigned caller can't start one.
+func TestADeviceStartsAWebSession(t *testing.T) {
+	db := testdb.New(t)
+	a := &devices.DevicesAPI{Pool: db.Pool, OwnerID: owner}
+	dev := register(t, a, authtest.NewDevice(t, "dev_placeholder00000000000000"))
+	store := &devices.Store{Pool: db.Pool, OwnerID: owner}
+	ctx := context.Background()
+
+	res, err := a.CreateDeviceWebSession(asDevice(dev.Id), api.CreateDeviceWebSessionRequestObject{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, ok := res.(api.CreateDeviceWebSession201JSONResponse)
+	if !ok || s.CookieName != auth.DeviceSessionCookie || len(s.Token) != 43 {
+		t.Fatalf("session = %#v", res)
+	}
+	if life := time.Until(s.ExpiresAt); life < auth.DeviceSessionLife-time.Minute || life > auth.DeviceSessionLife {
+		t.Fatalf("expires in %s", life)
+	}
+	sum := sha256.Sum256([]byte(s.Token))
+	if id, exp, err := store.WebSession(ctx, sum[:]); err != nil || id != dev.Id || !exp.Equal(s.ExpiresAt) {
+		t.Fatalf("lookup: %q, %s, %v", id, exp, err)
+	}
+	var stored int
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM device_web_sessions WHERE token_hash = $1`, []byte(s.Token)).Scan(&stored); err != nil || stored != 0 {
+		t.Fatalf("the token itself is stored: %d, %v", stored, err)
+	}
+
+	for name, c := range map[string]context.Context{
+		"a web session": auth.WithPrincipal(ctx, auth.Principal{Kind: auth.KindDevice, Name: dev.Id, Scope: auth.ScopeOwner, Via: "session"}),
+		"a sign-in":     signIn(authtest.NewDevice(t, "dev_placeholder11111111111111")),
+		"no principal":  ctx,
+	} {
+		if res, err := a.CreateDeviceWebSession(c, api.CreateDeviceWebSessionRequestObject{}); err != nil || !isType[api.CreateDeviceWebSession403JSONResponse](res) {
+			t.Fatalf("%s: %#v, %v", name, res, err)
+		}
+	}
+
+	if _, err := db.Pool.Exec(ctx, `UPDATE device_web_sessions SET created_at = now() - interval '13 hours', expires_at = now() - interval '1 hour'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.WebSession(ctx, sum[:]); !errors.Is(err, auth.ErrUnknownSession) {
+		t.Fatalf("expired: %v", err)
+	}
+	if err := store.PruneTokenUses(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM device_web_sessions`).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("after pruning: %d, %v", left, err)
+	}
+}
+
+func TestADevicesWebSessionsEnd(t *testing.T) {
+	db := testdb.New(t)
+	var ended []string
+	a := &devices.DevicesAPI{Pool: db.Pool, OwnerID: owner, OnSessionsEnded: func(id string) { ended = append(ended, id) }}
+	dev := register(t, a, authtest.NewDevice(t, "dev_placeholder00000000000000"))
+	other := register(t, a, authtest.NewDevice(t, "dev_placeholder11111111111111"))
+	store := &devices.Store{Pool: db.Pool, OwnerID: owner}
+	ctx := context.Background()
+	start := func(id string) []byte {
+		t.Helper()
+		res, err := a.CreateDeviceWebSession(asDevice(id), api.CreateDeviceWebSessionRequestObject{})
+		s, ok := res.(api.CreateDeviceWebSession201JSONResponse)
+		if err != nil || !ok {
+			t.Fatalf("start: %#v, %v", res, err)
+		}
+		sum := sha256.Sum256([]byte(s.Token))
+		return sum[:]
+	}
+	live := func(hash []byte) bool {
+		t.Helper()
+		_, _, err := store.WebSession(ctx, hash)
+		if err != nil && !errors.Is(err, auth.ErrUnknownSession) {
+			t.Fatal(err)
+		}
+		return err == nil
+	}
+
+	// A new session replaces the device's earlier one, and no other device's.
+	first, theirs := start(dev.Id), start(other.Id)
+	second := start(dev.Id)
+	if live(first) || !live(second) || !live(theirs) {
+		t.Fatalf("after a second session: first %v, second %v, other device's %v", live(first), live(second), live(theirs))
+	}
+
+	// Only a signed request ends them.
+	session := auth.WithPrincipal(ctx, auth.Principal{Kind: auth.KindDevice, Name: dev.Id, Scope: auth.ScopeOwner, Via: "session"})
+	if res, err := a.EndDeviceWebSessions(session, api.EndDeviceWebSessionsRequestObject{}); err != nil || !isType[api.EndDeviceWebSessions403JSONResponse](res) || !live(second) {
+		t.Fatalf("ended from a web session: %#v, %v", res, err)
+	}
+	if res, err := a.EndDeviceWebSessions(asDevice(dev.Id), api.EndDeviceWebSessionsRequestObject{}); err != nil || !isType[api.EndDeviceWebSessions204Response](res) || live(second) || !live(theirs) {
+		t.Fatalf("ended: %#v, %v", res, err)
+	}
+	if want := []string{dev.Id, other.Id, dev.Id, dev.Id}; strings.Join(ended, ",") != strings.Join(want, ",") {
+		t.Fatalf("streams told to end for %v, want %v", ended, want)
+	}
+
+	// Signing out (a revoke) ends them too.
+	third := start(dev.Id)
+	if res, err := a.RevokeDevice(asDevice(dev.Id), api.RevokeDeviceRequestObject{DeviceId: dev.Id}); err != nil || !isType[api.RevokeDevice204Response](res) || live(third) {
+		t.Fatalf("after signing out: %#v, %v, live %v", res, err, live(third))
+	}
+}
+
+func TestOnlyASignedRequestChangesPush(t *testing.T) {
+	db := testdb.New(t)
+	a := &devices.DevicesAPI{Pool: db.Pool, OwnerID: owner}
+	dev := register(t, a, authtest.NewDevice(t, "dev_placeholder00000000000000"))
+	session := auth.WithPrincipal(context.Background(), auth.Principal{Kind: auth.KindDevice, Name: dev.Id, Scope: auth.ScopeOwner, Via: "session"})
+	body := &api.DevicePushRegistration{Token: strings.Repeat("ab", 32), Environment: api.Development}
+	if res, err := a.SetDevicePush(session, api.SetDevicePushRequestObject{Body: body}); err != nil || !isType[api.SetDevicePush403JSONResponse](res) {
+		t.Fatalf("set from a web session: %#v, %v", res, err)
+	}
+	if res, err := a.ClearDevicePush(session, api.ClearDevicePushRequestObject{}); err != nil || !isType[api.ClearDevicePush403JSONResponse](res) {
+		t.Fatalf("clear from a web session: %#v, %v", res, err)
+	}
+	if res, err := a.SetDevicePush(asDevice(dev.Id), api.SetDevicePushRequestObject{Body: body}); err != nil || !isType[api.SetDevicePush200JSONResponse](res) {
+		t.Fatalf("set, signed: %#v, %v", res, err)
 	}
 }

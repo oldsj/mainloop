@@ -172,6 +172,12 @@ export function privilegedDigest(item: QueueItem): string | null {
   return typeof digest === 'string' && /^[0-9a-f]{64}$/.test(digest) ? digest : null;
 }
 
+/** The privileged action a card approves, or null for any other item. */
+export function privilegedActionId(item: QueueItem): string | null {
+  const id = item.context?.privileged_action_id;
+  return privilegedDigest(item) !== null && typeof id === 'string' && id !== '' ? id : null;
+}
+
 /** The metadata an answer carries: Approve on a privileged-action card names the digest reviewed. */
 export function responseMetadata(
   item: QueueItem,

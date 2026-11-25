@@ -44,6 +44,11 @@ func (Unimplemented) ClearDevicePush(context.Context, ClearDevicePushRequestObje
 	return nil, apierr.NotImplemented
 }
 
+// CreateDeviceWebSession is not implemented yet.
+func (Unimplemented) CreateDeviceWebSession(context.Context, CreateDeviceWebSessionRequestObject) (CreateDeviceWebSessionResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // CreateSchedule is not implemented yet.
 func (Unimplemented) CreateSchedule(context.Context, CreateScheduleRequestObject) (CreateScheduleResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -96,6 +101,11 @@ func (Unimplemented) DeleteWorkspace(context.Context, DeleteWorkspaceRequestObje
 
 // DismissQueueDiagnostic is not implemented yet.
 func (Unimplemented) DismissQueueDiagnostic(context.Context, DismissQueueDiagnosticRequestObject) (DismissQueueDiagnosticResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// EndDeviceWebSessions is not implemented yet.
+func (Unimplemented) EndDeviceWebSessions(context.Context, EndDeviceWebSessionsRequestObject) (EndDeviceWebSessionsResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

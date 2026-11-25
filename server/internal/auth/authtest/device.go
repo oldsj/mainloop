@@ -81,6 +81,47 @@ type DeviceStore struct {
 	Touched map[string]int
 	// Pruned counts PruneTokenUses calls.
 	Pruned int
+	// Sessions maps a web session token's SHA-256 (hex) to its device and expiry.
+	Sessions map[string]Session
+}
+
+// Session is a web session in the fake store.
+type Session struct {
+	DeviceID string
+	Expires  time.Time
+}
+
+// AddSession records a web session token for device id, good until expires.
+func (s *DeviceStore) AddSession(token, id string, expires time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Sessions == nil {
+		s.Sessions = map[string]Session{}
+	}
+	sum := sha256.Sum256([]byte(token))
+	s.Sessions[hex.EncodeToString(sum[:])] = Session{DeviceID: id, Expires: expires}
+}
+
+// EndSessions ends every web session of device id, as a new session or a sign-out does.
+func (s *DeviceStore) EndSessions(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, v := range s.Sessions {
+		if v.DeviceID == id {
+			delete(s.Sessions, k)
+		}
+	}
+}
+
+// WebSession implements auth.DeviceStore. An expired session is unknown, as in the database.
+func (s *DeviceStore) WebSession(_ context.Context, tokenHash []byte) (string, time.Time, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, ok := s.Sessions[hex.EncodeToString(tokenHash)]
+	if !ok || !time.Now().Before(v.Expires) {
+		return "", time.Time{}, auth.ErrUnknownSession
+	}
+	return v.DeviceID, v.Expires, nil
 }
 
 // DeviceOrigin is the instance origin device tokens are signed for in tests (Devices.Audience).

@@ -141,6 +141,70 @@ describe('Needs you', () => {
     expect(bodies[1]).toEqual(['8', { response: 'Wait for the release' }]);
   });
 
+  it('in the iPhone app, approves a privileged action through the app, never unsigned', async () => {
+    const user = userEvent.setup();
+    const digest = 'b'.repeat(64);
+    const posted: unknown[] = [];
+    const replies: unknown[] = [
+      { status: 'cancelled' },
+      { status: 'failed', message: 'Touch ID failed.' },
+      { status: 'approved' }
+    ];
+    (window as unknown as { webkit: unknown }).webkit = {
+      messageHandlers: {
+        mainloop: {
+          postMessage: async (message: unknown) => {
+            posted.push(message);
+            return replies.shift();
+          }
+        }
+      }
+    };
+    const bodies: unknown[] = [];
+    server.use(
+      attentionRead(() =>
+        HttpResponse.json(
+          attentionSnapshot([
+            attentionItem(
+              queueItem({
+                id: '9',
+                item_type: 'approval',
+                title: 'Restart shop/web',
+                options: ['Approve', 'Deny'],
+                context: { privileged_action_digest: digest, privileged_action_id: 'pa-0009' }
+              })
+            )
+          ])
+        )
+      ),
+      respondPost(async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json({ status: 'ok', message: 'Sent' });
+      })
+    );
+    try {
+      renderInbox();
+      const card = (await screen.findByText('Restart shop/web')).closest('article') as HTMLElement;
+      const approve = () => user.click(within(card).getByRole('button', { name: 'Approve' }));
+
+      await approve(); // Touch ID cancelled: nothing shown, nothing sent
+      await waitFor(() => expect(posted).toHaveLength(1));
+      expect(within(card).queryByRole('alert')).not.toBeInTheDocument();
+
+      await approve();
+      expect(await within(card).findByRole('alert')).toHaveTextContent('Touch ID failed.');
+
+      await approve();
+      expect(await within(card).findByText('> Approve')).toBeInTheDocument();
+      expect(posted).toEqual(
+        Array(3).fill({ type: 'approve', item_id: '9', action_id: 'pa-0009', digest })
+      );
+      expect(bodies).toEqual([]); // the page never sent an Approve itself
+    } finally {
+      delete (window as unknown as { webkit?: unknown }).webkit;
+    }
+  });
+
   it('shows a plan review with its plan folded away until opened', async () => {
     const user = userEvent.setup();
     const plan = queueItem({

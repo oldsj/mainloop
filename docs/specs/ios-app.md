@@ -113,6 +113,25 @@ to build it.
   runs on fictional fixtures. Answers and messages then change only the app's copy. Approve on a
   sample privileged card is signed with a throwaway software key, without Touch ID.
 
+## The web app in the app (in progress)
+
+The app is becoming a shell around the web app: the web UI in a web view, with native only for
+sign-in, device keys, push, and the Touch ID approval sheet. The server and web parts are built:
+
+- The device's web session ([devices](devices.md#the-apps-web-view)).
+- In the app, the web app talks to it through one message handler, `mainloop`, and never holds a
+  key, the session's token or a signature:
+  - **Approve** on a privileged-action card asks the app (`approve`, with the card's item id,
+    action id and digest). The app shows its own sheet and sends the signed answer; the page sends
+    no Approve itself. A cancelled prompt changes nothing on the card; a failure shows the app's
+    message; anything else the app answers reads as a failure.
+  - A `401` asks the app for a new session (`sessionExpired`) instead of reloading through the
+    gateway's sign-in.
+  - Settings shows **This iPhone**, which opens the app's own screen, in place of the gateway's
+    Sign out.
+
+The native shell itself is not built yet.
+
 ## Not built yet
 
 These are planned (see the iOS plan in the pull request that added `ios/`). None is live:
