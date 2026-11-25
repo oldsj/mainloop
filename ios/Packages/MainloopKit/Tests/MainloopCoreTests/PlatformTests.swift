@@ -22,8 +22,8 @@ import Testing
         "https://mainloop.example.org/app", "https://user:pw@mainloop.example.org",
         "https://mainloop.example.org/?x=1",
     ] as [String?])
-    func anythingElseMeansFixtures(_ raw: String?) {
-        #expect(ServerOrigin.parse(raw) == .fixtures)
+    func anythingElseNamesNoServer(_ raw: String?) {
+        #expect(ServerOrigin.parse(raw) == .notConfigured)
     }
 
     @Test(arguments: [
@@ -37,20 +37,5 @@ import Testing
             return
         }
         #expect(MainloopAPI.apiBaseURL(origin: url).absoluteString == expected)
-    }
-}
-
-@Suite struct EdgeMarginsTests {
-    @Test func unionTakesTheLargestPerEdge() {
-        let outerCamera = EdgeMargins(top: 0, leading: 0, bottom: 0, trailing: 38)
-        let innerCamera = EdgeMargins(top: 52, leading: 0, bottom: 0, trailing: 0)
-        #expect(EdgeMargins.union([outerCamera, innerCamera]) == EdgeMargins(top: 52, trailing: 38))
-        #expect(EdgeMargins.union([]) == .zero)
-    }
-
-    @Test func subtractingTheSafeAreaNeverGoesNegative() {
-        let region = EdgeMargins(top: 52, trailing: 38)
-        let safe = EdgeMargins(top: 59, leading: 0, bottom: 34, trailing: 20)
-        #expect(region.subtracting(safe) == EdgeMargins(trailing: 18))
     }
 }

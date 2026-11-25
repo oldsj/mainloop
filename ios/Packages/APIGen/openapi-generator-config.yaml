@@ -7,15 +7,13 @@ accessModifier: public
 namingStrategy: idiomatic
 filter:
   operations:
-    - getHealth
     - getAttention
     - respondToQueueItem
     - getPrivilegedAction
-    - listSessions
-    - sendSessionMessage
     - registerDevice
-    - listDevices
     - getCurrentDevice
     - revokeDevice
+    - createDeviceWebSession
+    - endDeviceWebSessions
     - setDevicePush
     - clearDevicePush

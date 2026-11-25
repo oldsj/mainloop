@@ -47,19 +47,17 @@ public struct ActionRecord: Hashable, Sendable {
     /// What the Touch ID prompt says.
     public var reason: String { "Approve \(type) (\(actionID))" }
 
-    /// Hashes `record` and checks it is the card's: the same action id and digest, and the same
-    /// type when the card names one. Throws when the record doesn't parse as the canonical form.
-    public static func verify(_ record: String, for card: PrivilegedCard) throws -> ActionRecord {
+    /// Hashes `record` and reads it. The digest is the phone's own, never one the server or the
+    /// page gave. Throws when the record names another action than `actionID`, or doesn't parse as
+    /// the canonical form.
+    public static func read(_ record: String, actionID expected: String) throws -> ActionRecord {
         let bytes = Data(record.utf8)
         let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
-        guard let expected = card.approvable else { throw ActionRecordError.notApprovable }
-        guard digest == expected.digest else { throw ActionRecordError.digestMismatch }
         guard let object = try? JSONSerialization.jsonObject(with: bytes, options: [.fragmentsAllowed]) as? [String: Any],
               let actionID = object["action_id"] as? String, let type = object["type"] as? String,
               let args = object["args"] as? [String: Any]
         else { throw ActionRecordError.malformed }
-        guard actionID == expected.actionID else { throw ActionRecordError.otherAction }
-        if let cardType = card.type, cardType != type { throw ActionRecordError.otherAction }
+        guard actionID == expected else { throw ActionRecordError.otherAction }
         let facts = object["frozen_facts"] as? [String: Any] ?? [:]
         var context: [Field] = []
         if let requester = object["requester"] as? [String: Any] {
@@ -173,11 +171,7 @@ public struct ActionRecord: Hashable, Sendable {
 }
 
 public enum ActionRecordError: Error, Equatable, Sendable {
-    /// The card's action id or digest is missing or malformed.
-    case notApprovable
-    /// The record's SHA-256 isn't the card's digest.
-    case digestMismatch
-    /// The record names another action or type than the card.
+    /// The record names another action than the one asked for.
     case otherAction
     /// The record isn't the canonical form, or the action has no frozen facts yet.
     case malformed

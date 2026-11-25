@@ -15,13 +15,6 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /attention`.
     /// - Remark: Generated from `#/paths//attention/get(getAttention)`.
     func getAttention(_ input: Operations.GetAttention.Input) async throws -> Operations.GetAttention.Output
-    /// List Devices
-    ///
-    /// The owner's registered devices, newest first, revoked ones included. A device sees itself marked `current`.
-    ///
-    /// - Remark: HTTP `GET /devices`.
-    /// - Remark: Generated from `#/paths//devices/get(listDevices)`.
-    func listDevices(_ input: Operations.ListDevices.Input) async throws -> Operations.ListDevices.Output
     /// Register Device
     ///
     /// Registers a phone and its request key (docs/specs/devices.md). Only the owner's own Pocket ID token sent as a bearer may call this, issued within the last 10 minutes: the native app signs in once with its own OIDC client (MAINLOOP_AUTH_DEVICE_CLIENT_ID), whose tokens are good for this operation only. A device key, the login cookie or a ServiceAccount is refused with 403. The response's `id` is the `kid` and `sub` of the device's request tokens.
@@ -36,16 +29,30 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `GET /devices/current`.
     /// - Remark: Generated from `#/paths//devices/current/get(getCurrentDevice)`.
     func getCurrentDevice(_ input: Operations.GetCurrentDevice.Input) async throws -> Operations.GetCurrentDevice.Output
+    /// Create Device Web Session
+    ///
+    /// Starts a web session for the device that signed this request (docs/specs/devices.md, "The app's web view"). The iPhone app shows the web app in a web view, which can't sign its requests; it sets the returned token as the HttpOnly cookie `cookie_name`, and every request carrying it acts as this device until `expires_at` (an hour on), the session is replaced or ended, or the device is revoked. A new session ends the device's earlier ones. Only a request the device key signed starts one, never a web session or a sign-in. The token is returned once; the server keeps only its SHA-256.
+    ///
+    /// - Remark: HTTP `POST /devices/current/web-session`.
+    /// - Remark: Generated from `#/paths//devices/current/web-session/post(createDeviceWebSession)`.
+    func createDeviceWebSession(_ input: Operations.CreateDeviceWebSession.Input) async throws -> Operations.CreateDeviceWebSession.Output
+    /// End Device Web Sessions
+    ///
+    /// Ends every web session of the device that signed this request, and the streams they hold open. Only a request the device key signed may call it, never a web session.
+    ///
+    /// - Remark: HTTP `DELETE /devices/current/web-session`.
+    /// - Remark: Generated from `#/paths//devices/current/web-session/delete(endDeviceWebSessions)`.
+    func endDeviceWebSessions(_ input: Operations.EndDeviceWebSessions.Input) async throws -> Operations.EndDeviceWebSessions.Output
     /// Set Device Push Token
     ///
-    /// Sets the APNs device token of the device that signed this request (docs/specs/push-notifications.md). Replaces any token it had; a token another device had moves to this one. Only a device may call it.
+    /// Sets the APNs device token of the device that signed this request (docs/specs/push-notifications.md). Replaces any token it had; a token another device had moves to this one. Only a request the device key signed may call it, never the device's web session.
     ///
     /// - Remark: HTTP `PUT /devices/current/push`.
     /// - Remark: Generated from `#/paths//devices/current/push/put(setDevicePush)`.
     func setDevicePush(_ input: Operations.SetDevicePush.Input) async throws -> Operations.SetDevicePush.Output
     /// Clear Device Push Token
     ///
-    /// Stops pushes to the device that signed this request. Clearing a device with no token succeeds.
+    /// Stops pushes to the device that signed this request. Clearing a device with no token succeeds. Only a request the device key signed may call it, never the device's web session.
     ///
     /// - Remark: HTTP `DELETE /devices/current/push`.
     /// - Remark: Generated from `#/paths//devices/current/push/delete(clearDevicePush)`.
@@ -57,13 +64,6 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `DELETE /devices/{device_id}`.
     /// - Remark: Generated from `#/paths//devices/{device_id}/delete(revokeDevice)`.
     func revokeDevice(_ input: Operations.RevokeDevice.Input) async throws -> Operations.RevokeDevice.Output
-    /// Health
-    ///
-    /// Health check endpoint.
-    ///
-    /// - Remark: HTTP `GET /health`.
-    /// - Remark: Generated from `#/paths//health/get(getHealth)`.
-    func getHealth(_ input: Operations.GetHealth.Input) async throws -> Operations.GetHealth.Output
     /// Get Privileged Action
     ///
     /// One privileged action with what was asked, the facts the owner approved, the outcome and every step taken.
@@ -78,20 +78,6 @@ public protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /queue/{item_id}/respond`.
     /// - Remark: Generated from `#/paths//queue/{item_id}/respond/post(respondToQueueItem)`.
     func respondToQueueItem(_ input: Operations.RespondToQueueItem.Input) async throws -> Operations.RespondToQueueItem.Output
-    /// List Sessions
-    ///
-    /// List user's sessions.
-    ///
-    /// - Remark: HTTP `GET /sessions`.
-    /// - Remark: Generated from `#/paths//sessions/get(listSessions)`.
-    func listSessions(_ input: Operations.ListSessions.Input) async throws -> Operations.ListSessions.Output
-    /// Send Session Message
-    ///
-    /// Send a message to a session's conversation.
-    ///
-    /// - Remark: HTTP `POST /sessions/{session_id}/message`.
-    /// - Remark: Generated from `#/paths//sessions/{session_id}/message/post(sendSessionMessage)`.
-    func sendSessionMessage(_ input: Operations.SendSessionMessage.Input) async throws -> Operations.SendSessionMessage.Output
 }
 
 /// Convenience overloads for operation inputs.
@@ -102,15 +88,6 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//attention/get(getAttention)`.
     public func getAttention(headers: Operations.GetAttention.Input.Headers = .init()) async throws -> Operations.GetAttention.Output {
         try await getAttention(Operations.GetAttention.Input(headers: headers))
-    }
-    /// List Devices
-    ///
-    /// The owner's registered devices, newest first, revoked ones included. A device sees itself marked `current`.
-    ///
-    /// - Remark: HTTP `GET /devices`.
-    /// - Remark: Generated from `#/paths//devices/get(listDevices)`.
-    public func listDevices(headers: Operations.ListDevices.Input.Headers = .init()) async throws -> Operations.ListDevices.Output {
-        try await listDevices(Operations.ListDevices.Input(headers: headers))
     }
     /// Register Device
     ///
@@ -136,9 +113,27 @@ extension APIProtocol {
     public func getCurrentDevice(headers: Operations.GetCurrentDevice.Input.Headers = .init()) async throws -> Operations.GetCurrentDevice.Output {
         try await getCurrentDevice(Operations.GetCurrentDevice.Input(headers: headers))
     }
+    /// Create Device Web Session
+    ///
+    /// Starts a web session for the device that signed this request (docs/specs/devices.md, "The app's web view"). The iPhone app shows the web app in a web view, which can't sign its requests; it sets the returned token as the HttpOnly cookie `cookie_name`, and every request carrying it acts as this device until `expires_at` (an hour on), the session is replaced or ended, or the device is revoked. A new session ends the device's earlier ones. Only a request the device key signed starts one, never a web session or a sign-in. The token is returned once; the server keeps only its SHA-256.
+    ///
+    /// - Remark: HTTP `POST /devices/current/web-session`.
+    /// - Remark: Generated from `#/paths//devices/current/web-session/post(createDeviceWebSession)`.
+    public func createDeviceWebSession(headers: Operations.CreateDeviceWebSession.Input.Headers = .init()) async throws -> Operations.CreateDeviceWebSession.Output {
+        try await createDeviceWebSession(Operations.CreateDeviceWebSession.Input(headers: headers))
+    }
+    /// End Device Web Sessions
+    ///
+    /// Ends every web session of the device that signed this request, and the streams they hold open. Only a request the device key signed may call it, never a web session.
+    ///
+    /// - Remark: HTTP `DELETE /devices/current/web-session`.
+    /// - Remark: Generated from `#/paths//devices/current/web-session/delete(endDeviceWebSessions)`.
+    public func endDeviceWebSessions(headers: Operations.EndDeviceWebSessions.Input.Headers = .init()) async throws -> Operations.EndDeviceWebSessions.Output {
+        try await endDeviceWebSessions(Operations.EndDeviceWebSessions.Input(headers: headers))
+    }
     /// Set Device Push Token
     ///
-    /// Sets the APNs device token of the device that signed this request (docs/specs/push-notifications.md). Replaces any token it had; a token another device had moves to this one. Only a device may call it.
+    /// Sets the APNs device token of the device that signed this request (docs/specs/push-notifications.md). Replaces any token it had; a token another device had moves to this one. Only a request the device key signed may call it, never the device's web session.
     ///
     /// - Remark: HTTP `PUT /devices/current/push`.
     /// - Remark: Generated from `#/paths//devices/current/push/put(setDevicePush)`.
@@ -153,7 +148,7 @@ extension APIProtocol {
     }
     /// Clear Device Push Token
     ///
-    /// Stops pushes to the device that signed this request. Clearing a device with no token succeeds.
+    /// Stops pushes to the device that signed this request. Clearing a device with no token succeeds. Only a request the device key signed may call it, never the device's web session.
     ///
     /// - Remark: HTTP `DELETE /devices/current/push`.
     /// - Remark: Generated from `#/paths//devices/current/push/delete(clearDevicePush)`.
@@ -174,15 +169,6 @@ extension APIProtocol {
             path: path,
             headers: headers
         ))
-    }
-    /// Health
-    ///
-    /// Health check endpoint.
-    ///
-    /// - Remark: HTTP `GET /health`.
-    /// - Remark: Generated from `#/paths//health/get(getHealth)`.
-    public func getHealth(headers: Operations.GetHealth.Input.Headers = .init()) async throws -> Operations.GetHealth.Output {
-        try await getHealth(Operations.GetHealth.Input(headers: headers))
     }
     /// Get Privileged Action
     ///
@@ -211,38 +197,6 @@ extension APIProtocol {
         body: Operations.RespondToQueueItem.Input.Body
     ) async throws -> Operations.RespondToQueueItem.Output {
         try await respondToQueueItem(Operations.RespondToQueueItem.Input(
-            path: path,
-            headers: headers,
-            body: body
-        ))
-    }
-    /// List Sessions
-    ///
-    /// List user's sessions.
-    ///
-    /// - Remark: HTTP `GET /sessions`.
-    /// - Remark: Generated from `#/paths//sessions/get(listSessions)`.
-    public func listSessions(
-        query: Operations.ListSessions.Input.Query = .init(),
-        headers: Operations.ListSessions.Input.Headers = .init()
-    ) async throws -> Operations.ListSessions.Output {
-        try await listSessions(Operations.ListSessions.Input(
-            query: query,
-            headers: headers
-        ))
-    }
-    /// Send Session Message
-    ///
-    /// Send a message to a session's conversation.
-    ///
-    /// - Remark: HTTP `POST /sessions/{session_id}/message`.
-    /// - Remark: Generated from `#/paths//sessions/{session_id}/message/post(sendSessionMessage)`.
-    public func sendSessionMessage(
-        path: Operations.SendSessionMessage.Input.Path,
-        headers: Operations.SendSessionMessage.Input.Headers = .init(),
-        body: Operations.SendSessionMessage.Input.Body
-    ) async throws -> Operations.SendSessionMessage.Output {
-        try await sendSessionMessage(Operations.SendSessionMessage.Input(
             path: path,
             headers: headers,
             body: body

@@ -20,7 +20,7 @@ final class PushModel {
     private(set) var lastError: String?
     /// When APNs told the server this phone's token stopped working; nil while it works.
     private(set) var tokenInvalidAt: Date?
-    /// Set by a tapped notification; RootView opens it and clears it.
+    /// Set by a tapped notification; AppRoot opens its page in the web app and clears it.
     var pendingRoute: PushRoute?
 
     private let account: DeviceAccount
@@ -31,8 +31,8 @@ final class PushModel {
     /// one run send once.
     private var sent: (deviceID: String, token: Data)?
 
-    /// `client` is the app's signing client for `origin`; both are nil in sample-data builds,
-    /// which never register.
+    /// `client` is the app's signing client for `origin`; both are nil in a build that names no
+    /// server, which never registers.
     init(account: DeviceAccount, origin: URL?, client: Client?, environment: Components.Schemas.APNsEnvironment?) {
         self.account = account
         self.origin = origin
@@ -52,7 +52,7 @@ final class PushModel {
     /// placeholder instead of the text.
     static let categories: Set<UNNotificationCategory> = [
         // No actions: a signed Approve asks for Touch ID, which needs the app in the foreground,
-        // so cards are answered in the app.
+        // so a tap opens the card in the app.
         UNNotificationCategory(
             identifier: PushCategory.needsYou, actions: [], intentIdentifiers: [],
             hiddenPreviewsBodyPlaceholder: "Mainloop needs you", options: []
@@ -130,10 +130,10 @@ final class PushModel {
         }
     }
 
-    /// The app's badge follows the Needs-you count while signed in.
-    func setBadge(_ count: Int) {
-        guard signedIn else { return }
-        Task { try? await center.setBadgeCount(count) }
+    /// The app's badge follows the inbox's count (`GET /attention`) while signed in.
+    func refreshBadge() async {
+        guard signedIn, let client, let count = try? await AttentionBadge.count(client: client) else { return }
+        try? await center.setBadgeCount(count)
     }
 
     /// Signing out: the phone leaves APNs (a token left on the server is refused from then on, and
@@ -158,7 +158,7 @@ final class PushModel {
     }
 }
 
-/// UIKit's hooks for remote notifications. The app's state lives in `AppEnvironment.shared`, so
+/// UIKit's hooks for remote notifications. The app's state lives in `AppModel.shared`, so
 /// a notification tapped before the first screen appears still finds it.
 @MainActor
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -170,27 +170,27 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         center.setNotificationCategories(PushModel.categories)
-        let push = AppEnvironment.shared.push
+        let push = AppModel.shared.push
         Task { await push.sync() }
         return true
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        AppEnvironment.shared.push.received(token: deviceToken)
+        AppModel.shared.push.received(token: deviceToken)
     }
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: any Error) {
-        AppEnvironment.shared.push.registrationFailed(error)
+        AppModel.shared.push.registrationFailed(error)
     }
 
-    /// In the foreground: show it as usual, and refresh Needs you so the list matches.
+    /// In the foreground: show it as usual, and refresh the badge.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler([.banner, .list, .sound, .badge])
-        Task { @MainActor in await AppEnvironment.shared.needsYou.load() }
+        Task { @MainActor in await AppModel.shared.push.refreshBadge() }
     }
 
     /// A tap opens what the notification is about.
@@ -201,7 +201,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) {
         if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
             let route = PushRoute(userInfo: response.notification.request.content.userInfo)
-            Task { @MainActor in AppEnvironment.shared.push.pendingRoute = route }
+            Task { @MainActor in AppModel.shared.push.pendingRoute = route }
         }
         completionHandler()
     }
