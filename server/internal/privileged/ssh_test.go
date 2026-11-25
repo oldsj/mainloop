@@ -74,7 +74,11 @@ func TestSSHChecksTheHostAndRunsOnce(t *testing.T) {
 	a, card := e.preflighted(t, a.ID)
 	cardHas(t, card, "Run a command on nas-01 as admin over ssh", "on nas-01 (192.0.2.20:22) as admin", "sh -s",
 		"With this on its stdin", "zpool status", nasHello.HostKey, "Nothing can preview it",
-		"Risk: remote shell, as admin on nas-01, no preview.")
+		"Risk: remote shell, as admin on nas-01, no preview.",
+		"Its output (exit code, stdout and stderr, redacted and bounded) goes back to the agent and is stored with the action.")
+	if seen := string(privileged.AgentFacts(a.Type, a.Facts)); strings.Contains(seen, "192.0.2.20") || !strings.Contains(seen, nasHello.HostKey) {
+		t.Fatalf("the agent sees %s", seen)
+	}
 	if f.hellos != 1 || len(f.runs) != 0 {
 		t.Fatalf("preflight: %d hellos, runs %+v", f.hellos, f.runs)
 	}
@@ -93,22 +97,27 @@ func TestSSHChecksTheHostAndRunsOnce(t *testing.T) {
 	}
 }
 
-// A command that exits non-zero fails with its output; one that ran past its timeout is uncertain.
+// A command that exits non-zero fails with its output; one that ran past its timeout, or whose
+// connection broke after it was sent, is uncertain and may still be running.
 func TestSSHExitAndTimeout(t *testing.T) {
 	for name, tc := range map[string]struct {
 		out  privileged.CommandOutput
+		err  error
 		want string
+		why  string
 	}{
-		"exit":    {privileged.CommandOutput{ExitCode: 3, Stderr: []byte("no such pool\n")}, privileged.StateFailed},
-		"timeout": {privileged.CommandOutput{TimedOut: true}, privileged.StateUncertain},
+		"exit":    {privileged.CommandOutput{ExitCode: 3, Stderr: []byte("no such pool\n")}, nil, privileged.StateFailed, "exit"},
+		"timeout": {privileged.CommandOutput{TimedOut: true}, nil, privileged.StateUncertain, "may still be running there"},
+		"broken": {privileged.CommandOutput{}, errors.New("ssh to nas-01: the connection broke after the command was sent"),
+			privileged.StateUncertain, "may still be running there"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			e, f := newSSHEnv(t, func(privileged.SSHRun) (privileged.CommandOutput, error) { return tc.out, nil })
+			e, f := newSSHEnv(t, func(privileged.SSHRun) (privileged.CommandOutput, error) { return tc.out, tc.err })
 			a := e.request(t, privileged.TypeSSH, "ssh-1", sshArgs("zpool status tank"))
 			a, _ = e.preflighted(t, a.ID)
 			e.approve(t, a.ID)
 			e.runExecutor(t)
-			if a = e.get(t, a.ID); a.State != tc.want || len(f.runs) != 1 {
+			if a = e.get(t, a.ID); a.State != tc.want || !strings.Contains(deref(a.LastError), tc.why) || len(f.runs) != 1 {
 				t.Fatalf("action = %+v (%v), runs %d", a, deref(a.LastError), len(f.runs))
 			}
 		})
@@ -195,6 +204,7 @@ func TestSSHRequestRefusals(t *testing.T) {
 		{map[string]any{"target": "nas-01", "command": "echo \u202eok"}, "one line of text"},
 		{map[string]any{"target": "nas-01", "command": strings.Repeat("x", privileged.MaxSSHCommandBytes+1)}, "at most 8 KiB"},
 		{map[string]any{"target": "nas-01", "command": "sh -s", "stdin": "echo \x1b[2J"}, "stdin is text"},
+		{map[string]any{"target": "nas-01", "command": "sh -s", "stdin": "echo ok\rrm -rf /tmp/x\n"}, "carriage return that does not end a line"},
 		{map[string]any{"target": "nas-01", "command": "uptime", "timeout_seconds": 3600}, "timeout_seconds is 1 to"},
 		{map[string]any{"target": "nas-01", "command": "mysql --password=hunter2hunter2"}, "looks like it holds a credential"},
 		{map[string]any{"target": "nas-01", "command": "sh -s", "stdin": "export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"}, "stdin holds what looks like a credential"},

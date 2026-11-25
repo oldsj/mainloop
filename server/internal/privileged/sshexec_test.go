@@ -118,9 +118,13 @@ func (h *sshTestHost) session(ch ssh.Channel, reqs <-chan *ssh.Request) {
 			h.mu.Lock()
 			h.commands = append(h.commands, command)
 			h.mu.Unlock()
-			if command == "refuse" {
+			switch command {
+			case "refuse":
 				_ = req.Reply(false, nil)
 				continue
+			case "drop":
+				// The connection breaks after the host received the command, before it answered.
+				return
 			}
 			_ = req.Reply(true, nil)
 			go func() {
@@ -268,6 +272,11 @@ func TestExecSSHRunStartsNothing(t *testing.T) {
 	if _, err := e.Run(ctx, SSHRun{Host: "nas-01", Expect: hello, Command: "refuse", Timeout: time.Second}); !errors.As(err, &nothing) {
 		t.Fatalf("Run: %v", err)
 	}
+	// A break after the request was sent is not a refusal: the command may have started.
+	if _, err := e.Run(ctx, SSHRun{Host: "nas-01", Expect: hello, Command: "drop", Timeout: time.Second}); err == nil || errors.As(err, &nothing) ||
+		!strings.Contains(err.Error(), "the connection broke after the command was sent") {
+		t.Fatalf("Run on a dropped connection: %v", err)
+	}
 }
 
 // A command that runs past its timeout is killed, and the output so far returned as timed out; a
@@ -310,7 +319,8 @@ func TestExecSSHUnreachable(t *testing.T) {
 		}
 		_, err := e.Hello(context.Background(), "nas-01")
 		var r *refusal
-		if !errors.As(err, &r) || !strings.Contains(r.msg, "cannot reach nas-01") || !strings.Contains(r.msg, want) {
+		if !errors.As(err, &r) || !strings.Contains(r.msg, "cannot reach nas-01") || !strings.Contains(r.msg, want) ||
+			strings.Contains(r.msg, e.Hosts["nas-01"].Addr().String()) {
 			t.Errorf("%v: err = %v", errno, err)
 		}
 	}

@@ -363,7 +363,8 @@ host, over ssh, as that host's admin user, with the executor's own key for that 
 - `command` is one line of at most 8 KiB, with no control or invisible characters. The remote
   user's shell receives and interprets it, as ssh always does: it can do anything that user can.
   `stdin` is up to 64 KiB of text that the command reads (a script for `sh -s`, a file's new
-  contents). `timeout_seconds` is 1 to 600, default 60. A command or stdin that looks like it holds
+  contents); a carriage return is allowed only before a newline, so no line can show as something
+  other than what runs. `timeout_seconds` is 1 to 600, default 60. A command or stdin that looks like it holds
   a credential is refused (`contains_secret`): the card shows them as they are.
 - The executor's ssh client is its own (Go's `x/crypto/ssh`, no OpenSSH configuration). It accepts
   only the host key pinned for that host, logs in with that host's key only, and asks for the
@@ -371,17 +372,23 @@ host, over ssh, as that host's admin user, with the executor's own key for that 
   Each host's key, user and pinned host key are read for each connection.
 - **Preflight.** The executor connects, checks the host key, logs in and disconnects. Nothing runs,
   and nothing can preview the command. The facts are the host, its address, the user and the host
-  key's fingerprint. A host key that is not the pinned one, a refused login, or a host the executor
-  cannot reach ends the request as `preflight_failed`, with the reason.
+  key's fingerprint; the agent sees them without the address. A host key that is not the pinned
+  one, a refused login, or a host the executor cannot reach ends the request as `preflight_failed`,
+  with the reason, which names the host but not its address.
 - The card shows the command, its stdin, the host, user, address and host key, and tags: remote
   shell, the user and host, and from a scan of the words, which is not a guarantee, destructive
   (`rm`, `dd`, `mkfs`, `Remove-Item`…) and reboot or power off. A command tagged destructive waits
-  1 hour for the owner.
+  1 hour for the owner. The card says that the command's output (exit code, stdout and stderr,
+  redacted and bounded) goes back to the agent and is stored with the action.
 - **Run.** The executor connects again and checks that the host key, user and address are those the
   owner saw. If any changed, it is `stale` and nothing runs. Then it runs the command once, with
-  the run's result as for the other commands. A failure before the command starts is `failed`,
-  "nothing ran"; one after is `uncertain`, and it is never run again. A command that ends without
-  an exit status (a dropped connection) is `uncertain`.
+  the run's result as for the other commands. Only a failure before the command is sent, or the
+  host's explicit refusal of the exec request, is `failed`, "nothing ran". A connection that breaks
+  after the command was sent is `uncertain`, since the host may have started it, and it is never
+  run again. A command that ends without an exit status (a dropped connection) is `uncertain`. One
+  that runs past its timeout is `uncertain` too: the executor asks the host to kill it and closes
+  the connection, but with no terminal the host may ignore both, so the command may still be
+  running there.
 
 ## Preflight and the card
 

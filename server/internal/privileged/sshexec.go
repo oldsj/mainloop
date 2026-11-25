@@ -172,7 +172,8 @@ func (e ExecSSH) connect(ctx context.Context, name string) (*ssh.Client, SSHHell
 	}
 	conn, err := dial(dctx, addr)
 	if err != nil {
-		return nil, hello, c, refuse("cannot reach %s (%s): %s", name, addr, dialReason(err))
+		// The host's name only: the agent sees refusals, not the network's addresses.
+		return nil, hello, c, refuse("cannot reach %s: %s", name, dialReason(err))
 	}
 	// The handshake has its own deadline; the dial's context does not reach it.
 	_ = conn.SetDeadline(time.Now().Add(sshDialTimeout))
@@ -247,9 +248,14 @@ func (e ExecSSH) Run(ctx context.Context, run SSHRun) (CommandOutput, error) {
 	var stdout, stderr capped
 	sess.Stdout, sess.Stderr = &stdout, &stderr
 	sess.Stdin = strings.NewReader(run.Stdin)
-	// A failed exec request is answered by the host before its shell starts.
 	if err := sess.Start(run.Command); err != nil {
-		return CommandOutput{Credentials: creds}, &NothingRan{fmt.Errorf("ssh to %s: the host refused to start the command", run.Host)}
+		// Only the host's explicit answer to the exec request (x/crypto/ssh's error when the reply
+		// is a refusal) means nothing ran. Any other error came after the request was sent: the
+		// host may have started the command before the connection broke.
+		if err.Error() == "ssh: command "+run.Command+" failed" {
+			return CommandOutput{Credentials: creds}, &NothingRan{fmt.Errorf("ssh to %s: the host refused to start the command", run.Host)}
+		}
+		return CommandOutput{Credentials: creds}, fmt.Errorf("ssh to %s: the connection broke after the command was sent", run.Host)
 	}
 	done := make(chan error, 1)
 	go func() { done <- sess.Wait() }()

@@ -59,6 +59,9 @@ func normalizeSSH(raw json.RawMessage) (any, error) {
 		return nil, invalidf("stdin is at most %d KiB", MaxStdinBytes>>10)
 	case !utf8.ValidString(a.Stdin) || strings.ContainsFunc(a.Stdin, unprintableText):
 		return nil, invalidf("stdin is text: no control characters but newlines and tabs, and no invisible ones")
+	case strings.Contains(strings.ReplaceAll(a.Stdin, "\r\n", ""), "\r"):
+		// A bare carriage return can make a line show as something other than what runs.
+		return nil, invalidf("stdin has a carriage return that does not end a line (\\r without \\n)")
 	case a.TimeoutSeconds < 0 || time.Duration(a.TimeoutSeconds)*time.Second > MaxCommandTimeout:
 		return nil, invalidf("timeout_seconds is 1 to %d (default %d)", int(MaxCommandTimeout.Seconds()), int(DefaultCommandTimeout.Seconds()))
 	}
@@ -120,6 +123,24 @@ type SSHFacts struct {
 	// it again just before the command runs.
 	HostKey   string    `json:"host_key"`
 	CheckedAt time.Time `json:"checked_at"`
+}
+
+// sshAgentFacts are the facts the agent sees: the host by name, not its address.
+func sshAgentFacts(facts json.RawMessage) json.RawMessage {
+	var f SSHFacts
+	if err := json.Unmarshal(facts, &f); err != nil {
+		return nil
+	}
+	b, err := json.Marshal(struct {
+		Host      string    `json:"host"`
+		User      string    `json:"user"`
+		HostKey   string    `json:"host_key"`
+		CheckedAt time.Time `json:"checked_at"`
+	}{f.Host, f.User, f.HostKey, f.CheckedAt})
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // SSHHello is what the executor learned connecting and logging in to a host, without running
@@ -189,7 +210,8 @@ func renderSSH(r dbq.PrivilegedAction, ctx map[string]any) (string, string, map[
 	}
 	fmt.Fprintf(&b, "\nNothing can preview it. The host presented its pinned key (%s); just before the command runs, "+
 		"the executor checks that again, and runs nothing if it changed. ", f.HostKey)
-	b.WriteString("There is no retry: if the answer is lost, the outcome is uncertain and it is not run again.")
+	b.WriteString("There is no retry: if the answer is lost, the outcome is uncertain and it is not run again. ")
+	b.WriteString("Its output (exit code, stdout and stderr, redacted and bounded) goes back to the agent and is stored with the action.")
 	tags := []string{"remote shell", "as " + f.User + " on " + f.Host}
 	if w := sshMatches(a, sshDeleteWords); len(w) > 0 {
 		tags = append([]string{"destructive: may delete or wipe (" + strings.Join(w, ", ") + ")"}, tags...)
@@ -239,7 +261,14 @@ func (r *Runner) ssh(ctx context.Context, row dbq.PrivilegedAction) outcome {
 		return outcome{state: StateFailed, err: "nothing ran on " + a.Target + ": " + safeError(before.Err)}
 	}
 	if err != nil {
-		return outcome{state: StateUncertain, err: "the command could not be run to its end on " + a.Target + ": " + safeError(err)}
+		return outcome{state: StateUncertain, err: "the command could not be run to its end on " + a.Target + ": " + safeError(err) +
+			"; it may have run, and may still be running there"}
 	}
-	return commandOutcome("the command on "+a.Target, out, a.timeout())
+	o := commandOutcome("the command on "+a.Target, out, a.timeout())
+	if out.TimedOut {
+		// There is no terminal, so the host may ignore the kill signal and closing the connection.
+		o.err = fmt.Sprintf("the command on %s ran past its %s; the executor asked the host to kill it and closed the connection, "+
+			"but the host may ignore that, so it may still be running there, and what it changed is unknown", a.Target, a.timeout())
+	}
+	return o
 }
