@@ -1,8 +1,8 @@
 import SafariServices
 import SwiftUI
 
-/// The web app for screens that aren't native yet. SFSafariViewController keeps its own sign-in
-/// and supports passkeys on the identity provider, which an in-app web view would not.
+/// A page that isn't Mainloop's (a pull request, docs), opened from the web app in a Safari sheet
+/// with Safari's own cookies, never in the app's web view.
 struct SafariView: UIViewControllerRepresentable {
     let url: URL
 

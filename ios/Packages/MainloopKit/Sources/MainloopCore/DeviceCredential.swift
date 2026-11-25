@@ -298,7 +298,7 @@ public struct AccountSigningMiddleware: ClientMiddleware {
     }
 }
 
-/// Signs approvals of privileged actions for the Needs-you model (docs/specs/ios-app.md).
+/// Signs approvals of privileged actions for the approval sheet (docs/specs/ios-app.md).
 public protocol Approver: Sendable {
     /// Whether this phone can sign approvals: registered with an approval key.
     var canApprove: Bool { get }
@@ -327,23 +327,6 @@ public struct DeviceApprover: Approver {
         guard let (credential, signer) = approving else { throw ApprovalError.noApprovalKey }
         return try await ApprovalToken.make(
             deviceID: credential.deviceID, audience: DeviceToken.audience(for: credential.origin),
-            actionID: actionID, digest: digest, signer: signer, reason: reason
-        )
-    }
-}
-
-/// Sample-data builds: a throwaway software key, no Touch ID. The fixtures check only that an
-/// approval is attached.
-public struct SampleApprover: Approver {
-    let signer = SoftwareSigner()
-
-    public init() {}
-
-    public var canApprove: Bool { true }
-
-    public func approval(actionID: String, digest: String, reason: String) async throws -> String {
-        try await ApprovalToken.make(
-            deviceID: "dev_sample", audience: "https://sample.example.test",
             actionID: actionID, digest: digest, signer: signer, reason: reason
         )
     }

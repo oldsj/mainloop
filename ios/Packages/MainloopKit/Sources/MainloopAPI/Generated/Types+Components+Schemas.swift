@@ -965,41 +965,6 @@ extension Components {
                 case result
             }
         }
-        /// Request to send a message to a session.
-        ///
-        /// - Remark: Generated from `#/components/schemas/SessionMessageRequest`.
-        public struct SessionMessageRequest: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/SessionMessageRequest/message`.
-            public var message: Swift.String
-            /// The client's id for the message, its idempotency key: sending the same id again returns the first result and records nothing twice. Omitted, the server picks one.
-            ///
-            /// - Remark: Generated from `#/components/schemas/SessionMessageRequest/message_id`.
-            public var messageId: Swift.String?
-            /// Join the session's running turn at its next tool boundary, as a message typed while Claude Code works does, instead of queueing behind it. It joins only when the session's agent takes steers, a turn is running, and the message is not a slash command; otherwise it is an ordinary message. A steer that cannot join after all runs as the next turn, once.
-            ///
-            /// - Remark: Generated from `#/components/schemas/SessionMessageRequest/steer`.
-            public var steer: Swift.Bool?
-            /// Creates a new `SessionMessageRequest`.
-            ///
-            /// - Parameters:
-            ///   - message:
-            ///   - messageId: The client's id for the message, its idempotency key: sending the same id again returns the first result and records nothing twice. Omitted, the server picks one.
-            ///   - steer: Join the session's running turn at its next tool boundary, as a message typed while Claude Code works does, instead of queueing behind it. It joins only when the session's agent takes steers, a turn is running, and the message is not a slash command; otherwise it is an ordinary message. A steer that cannot join after all runs as the next turn, once.
-            public init(
-                message: Swift.String,
-                messageId: Swift.String? = nil,
-                steer: Swift.Bool? = nil
-            ) {
-                self.message = message
-                self.messageId = messageId
-                self.steer = steer
-            }
-            public enum CodingKeys: String, CodingKey {
-                case message
-                case messageId = "message_id"
-                case steer
-            }
-        }
         /// Status of a session.
         ///
         /// - Remark: Generated from `#/components/schemas/SessionStatus`.
@@ -1120,60 +1085,6 @@ extension Components {
                 ])
             }
         }
-        /// `{detail: string}` with an optional stable `code`.
-        ///
-        /// - Remark: Generated from `#/components/schemas/CodedHTTPError`.
-        public struct CodedHTTPError: Codable, Hashable, Sendable {
-            /// Human-readable error message.
-            ///
-            /// - Remark: Generated from `#/components/schemas/CodedHTTPError/detail`.
-            public var detail: Swift.String
-            /// Stable machine code for a refused main-thread provider switch or a message refused because one is pending; absent on other conflicts. `busy`: the main has open work or changed while the request ran. `pending`: a switch is pending and the request needs it settled or recoverable first. `unconfirmed`: kagent could not confirm the main idle, the old Session suspended, or the pending target absent. `unresolved`: a native create for the main is unresolved. `agent_unavailable`: the target Agent is missing or not ready.
-            ///
-            /// - Remark: Generated from `#/components/schemas/CodedHTTPError/code`.
-            @frozen public enum CodePayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case busy = "busy"
-                case pending = "pending"
-                case unconfirmed = "unconfirmed"
-                case unresolved = "unresolved"
-                case agentUnavailable = "agent_unavailable"
-            }
-            /// Stable machine code for a refused main-thread provider switch or a message refused because one is pending; absent on other conflicts. `busy`: the main has open work or changed while the request ran. `pending`: a switch is pending and the request needs it settled or recoverable first. `unconfirmed`: kagent could not confirm the main idle, the old Session suspended, or the pending target absent. `unresolved`: a native create for the main is unresolved. `agent_unavailable`: the target Agent is missing or not ready.
-            ///
-            /// - Remark: Generated from `#/components/schemas/CodedHTTPError/code`.
-            public var code: Components.Schemas.CodedHTTPError.CodePayload?
-            /// Creates a new `CodedHTTPError`.
-            ///
-            /// - Parameters:
-            ///   - detail: Human-readable error message.
-            ///   - code: Stable machine code for a refused main-thread provider switch or a message refused because one is pending; absent on other conflicts. `busy`: the main has open work or changed while the request ran. `pending`: a switch is pending and the request needs it settled or recoverable first. `unconfirmed`: kagent could not confirm the main idle, the old Session suspended, or the pending target absent. `unresolved`: a native create for the main is unresolved. `agent_unavailable`: the target Agent is missing or not ready.
-            public init(
-                detail: Swift.String,
-                code: Components.Schemas.CodedHTTPError.CodePayload? = nil
-            ) {
-                self.detail = detail
-                self.code = code
-            }
-            public enum CodingKeys: String, CodingKey {
-                case detail
-                case code
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.detail = try container.decode(
-                    Swift.String.self,
-                    forKey: .detail
-                )
-                self.code = try container.decodeIfPresent(
-                    Components.Schemas.CodedHTTPError.CodePayload.self,
-                    forKey: .code
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "detail",
-                    "code"
-                ])
-            }
-        }
         /// - Remark: Generated from `#/components/schemas/QueueRespondResponse`.
         public struct QueueRespondResponse: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/QueueRespondResponse/status`.
@@ -1217,111 +1128,6 @@ extension Components {
                 try decoder.ensureNoAdditionalProperties(knownKeys: [
                     "status",
                     "message"
-                ])
-            }
-        }
-        /// - Remark: Generated from `#/components/schemas/SessionMessageResponse`.
-        public struct SessionMessageResponse: Codable, Hashable, Sendable {
-            /// `queued`: recorded durably behind an open turn, and delivered in its own turn once that one ends; `ok`: admitted at once; `steered`: recorded to join the running turn (if it cannot, it runs as the next turn).
-            ///
-            /// - Remark: Generated from `#/components/schemas/SessionMessageResponse/status`.
-            @frozen public enum StatusPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case ok = "ok"
-                case queued = "queued"
-                case steered = "steered"
-            }
-            /// `queued`: recorded durably behind an open turn, and delivered in its own turn once that one ends; `ok`: admitted at once; `steered`: recorded to join the running turn (if it cannot, it runs as the next turn).
-            ///
-            /// - Remark: Generated from `#/components/schemas/SessionMessageResponse/status`.
-            public var status: Components.Schemas.SessionMessageResponse.StatusPayload
-            /// - Remark: Generated from `#/components/schemas/SessionMessageResponse/message_id`.
-            public var messageId: Swift.String
-            /// Creates a new `SessionMessageResponse`.
-            ///
-            /// - Parameters:
-            ///   - status: `queued`: recorded durably behind an open turn, and delivered in its own turn once that one ends; `ok`: admitted at once; `steered`: recorded to join the running turn (if it cannot, it runs as the next turn).
-            ///   - messageId:
-            public init(
-                status: Components.Schemas.SessionMessageResponse.StatusPayload,
-                messageId: Swift.String
-            ) {
-                self.status = status
-                self.messageId = messageId
-            }
-            public enum CodingKeys: String, CodingKey {
-                case status
-                case messageId = "message_id"
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.status = try container.decode(
-                    Components.Schemas.SessionMessageResponse.StatusPayload.self,
-                    forKey: .status
-                )
-                self.messageId = try container.decode(
-                    Swift.String.self,
-                    forKey: .messageId
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "status",
-                    "message_id"
-                ])
-            }
-        }
-        /// Liveness: `status` is always `healthy`; `database` is `ok` while the database answers.
-        ///
-        /// - Remark: Generated from `#/components/schemas/HealthResponse`.
-        public struct HealthResponse: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/HealthResponse/status`.
-            @frozen public enum StatusPayload: String, Codable, Hashable, Sendable, CaseIterable {
-                case healthy = "healthy"
-            }
-            /// - Remark: Generated from `#/components/schemas/HealthResponse/status`.
-            public var status: Components.Schemas.HealthResponse.StatusPayload
-            /// - Remark: Generated from `#/components/schemas/HealthResponse/database`.
-            public var database: Swift.String
-            /// Git commit the server image was built from; `dev` for an unstamped build.
-            ///
-            /// - Remark: Generated from `#/components/schemas/HealthResponse/revision`.
-            public var revision: Swift.String?
-            /// Creates a new `HealthResponse`.
-            ///
-            /// - Parameters:
-            ///   - status:
-            ///   - database:
-            ///   - revision: Git commit the server image was built from; `dev` for an unstamped build.
-            public init(
-                status: Components.Schemas.HealthResponse.StatusPayload,
-                database: Swift.String,
-                revision: Swift.String? = nil
-            ) {
-                self.status = status
-                self.database = database
-                self.revision = revision
-            }
-            public enum CodingKeys: String, CodingKey {
-                case status
-                case database
-                case revision
-            }
-            public init(from decoder: any Swift.Decoder) throws {
-                let container = try decoder.container(keyedBy: CodingKeys.self)
-                self.status = try container.decode(
-                    Components.Schemas.HealthResponse.StatusPayload.self,
-                    forKey: .status
-                )
-                self.database = try container.decode(
-                    Swift.String.self,
-                    forKey: .database
-                )
-                self.revision = try container.decodeIfPresent(
-                    Swift.String.self,
-                    forKey: .revision
-                )
-                try decoder.ensureNoAdditionalProperties(knownKeys: [
-                    "status",
-                    "database",
-                    "revision"
                 ])
             }
         }
@@ -1558,6 +1364,41 @@ extension Components {
                     "updated_at",
                     "invalid_at"
                 ])
+            }
+        }
+        /// A device's web session; the token is shown once.
+        ///
+        /// - Remark: Generated from `#/components/schemas/DeviceWebSession`.
+        public struct DeviceWebSession: Codable, Hashable, Sendable {
+            /// The cookie the web view sends the token in.
+            ///
+            /// - Remark: Generated from `#/components/schemas/DeviceWebSession/cookie_name`.
+            public var cookieName: Swift.String
+            /// The session's secret, 43 base64url characters. Set it HttpOnly and Secure.
+            ///
+            /// - Remark: Generated from `#/components/schemas/DeviceWebSession/token`.
+            public var token: Swift.String
+            /// - Remark: Generated from `#/components/schemas/DeviceWebSession/expires_at`.
+            public var expiresAt: Foundation.Date
+            /// Creates a new `DeviceWebSession`.
+            ///
+            /// - Parameters:
+            ///   - cookieName: The cookie the web view sends the token in.
+            ///   - token: The session's secret, 43 base64url characters. Set it HttpOnly and Secure.
+            ///   - expiresAt:
+            public init(
+                cookieName: Swift.String,
+                token: Swift.String,
+                expiresAt: Foundation.Date
+            ) {
+                self.cookieName = cookieName
+                self.token = token
+                self.expiresAt = expiresAt
+            }
+            public enum CodingKeys: String, CodingKey {
+                case cookieName = "cookie_name"
+                case token
+                case expiresAt = "expires_at"
             }
         }
         /// An APNs device token, as the app received it, in lower-case hex.

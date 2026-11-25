@@ -4,7 +4,8 @@ import MainloopCore
 import SwiftUI
 import UIKit
 
-/// This phone's registration, as Settings shows it (docs/specs/devices.md).
+/// This phone's pairing (docs/specs/devices.md): its request key and approval key, registered
+/// with Mainloop through a Pocket ID sign-in.
 @MainActor @Observable
 final class AccountModel {
     enum Phase: Equatable {
@@ -15,18 +16,17 @@ final class AccountModel {
     }
 
     private(set) var phase: Phase
+    /// Why the last sign-in failed, in a sentence that says what to do.
     var lastError: String?
 
     let account: DeviceAccount
     private let origin: URL?
     private let signIn: PocketIDSignIn?
-    private let push: PushModel
 
-    init(account: DeviceAccount, origin: URL?, signIn: PocketIDSignIn?, push: PushModel) {
+    init(account: DeviceAccount, origin: URL?, signIn: PocketIDSignIn?) {
         self.account = account
         self.origin = origin
         self.signIn = signIn
-        self.push = push
         if let credential = account.credential, credential.origin == origin {
             phase = .signedIn(deviceID: credential.deviceID)
         } else {
@@ -34,11 +34,11 @@ final class AccountModel {
         }
     }
 
-    /// Makes a new request key, signs in with Pocket ID in a private browser session for that key
-    /// (the nonce is its thumbprint) and registers it. The Pocket ID token is used once and never
-    /// stored.
-    func register(using session: WebAuthenticationSession) async {
-        guard let origin, let signIn, phase == .signedOut else { return }
+    /// Makes a new request key and approval key, signs in with Pocket ID in a private browser
+    /// session for that key (the nonce is its thumbprint) and registers it. The Pocket ID token is
+    /// used once and never stored. True when this iPhone is paired.
+    func register(using session: WebAuthenticationSession) async -> Bool {
+        guard let origin, let signIn, phase == .signedOut else { return false }
         phase = .working
         lastError = nil
         do {
@@ -68,37 +68,51 @@ final class AccountModel {
                 throw error
             }
             phase = .signedIn(deviceID: credential.deviceID)
-            // Registered: now there is somewhere to send a token. iOS asks only the first time.
-            await push.requestPermission()
+            return true
         } catch let error as ASWebAuthenticationSessionError where error.code == .canceledLogin {
             phase = .signedOut
         } catch {
-            lastError = Self.describe(error)
+            lastError = Self.describe(error, origin: origin)
             phase = .signedOut
         }
+        return false
     }
 
-    /// How this phone approves privileged actions, as Settings shows it; nil while signed out.
+    /// The request key: where it lives.
+    var requestKey: String? {
+        guard case .signedIn = phase, let credential = account.credential else { return nil }
+        return credential.keyKind == .secureEnclave ? "Secure Enclave" : "Software key (simulator)"
+    }
+
+    /// How this phone approves privileged actions; nil while signed out.
     var approvals: String? {
         guard case .signedIn = phase, let credential = account.credential, credential.approvalKeyData != nil else { return nil }
-        return credential.keyKind == .secureEnclave ? "Touch ID" : "Software key (simulator)"
+        return credential.keyKind == .secureEnclave ? "Secure Enclave, Touch ID each time" : "Software key (simulator), no Touch ID"
     }
 
     func signOut() async {
         phase = .working
         try? await account.signOut()
-        await push.signedOut()
         phase = origin != nil && signIn != nil ? .signedOut : .unavailable
     }
 
-    private static func describe(_ error: Error) -> String {
+    private static func describe(_ error: Error, origin: URL) -> String {
+        let host = origin.host() ?? origin.absoluteString
         switch error {
-        case DeviceError.registrationRefused(403): "Pocket ID signed you in, but Mainloop refused to register this phone."
-        case DeviceError.registrationRefused(let status): "Mainloop refused to register this phone (\(status))."
-        case DeviceError.noSecureEnclave: "This phone has no Secure Enclave."
-        case DeviceError.alreadyRegistered: "This key is already registered. Try again."
-        case is PocketIDSignIn.Failure: "Pocket ID sign-in failed."
-        default: "Couldn't register this phone: \(error.localizedDescription)"
+        case DeviceError.registrationRefused(403):
+            return "Pocket ID signed you in, but Mainloop refused to pair this iPhone. Mainloop pairs only its owner's Pocket ID account, through the iPhone app's own client (MAINLOOP_AUTH_DEVICE_CLIENT_ID)."
+        case DeviceError.registrationRefused(let status):
+            return "Mainloop refused to pair this iPhone (it answered \(status)). Check that \(host) runs a version with device pairing."
+        case DeviceError.noSecureEnclave:
+            return "This iPhone has no Secure Enclave, which pairing needs for its keys."
+        case DeviceError.alreadyRegistered:
+            return "That key was already paired. Try again: a new key is made each time."
+        case is PocketIDSignIn.Failure:
+            return "Pocket ID didn't complete the sign-in. Try again; if it keeps failing, check the iPhone app's client in Pocket ID."
+        case is URLError:
+            return "Couldn't reach Pocket ID or \(host). They run on your home network: connect to it or to its VPN, then try again."
+        default:
+            return "Couldn't pair this iPhone. Try again."
         }
     }
 }

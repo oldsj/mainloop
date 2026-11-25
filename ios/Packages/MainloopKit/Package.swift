@@ -2,7 +2,8 @@
 // MainloopKit: everything in the iOS app that doesn't need UIKit or a simulator.
 // - MainloopAPI: the client generated from api/openapi.yaml by ios/scripts/generate-api.sh
 //   (committed in Sources/MainloopAPI/Generated), filtered to the operations the app calls.
-// - MainloopCore: view models, fixtures and layout logic over the generated types.
+// - MainloopCore: device keys and signing, the approval sheet's model, the web view's session,
+//   bridge and navigation rules, over the generated types.
 // `swift test` runs the tests on macOS; the app target builds against the same package.
 import PackageDescription
 

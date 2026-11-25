@@ -1,6 +1,6 @@
 # Mainloop for iOS
 
-A native iPhone app for Mainloop's owner, laid out for iPhone Duo. See
+An iPhone app for Mainloop's owner: the web app in a native shell that holds the device's keys. See
 [docs/specs/ios-app.md](../docs/specs/ios-app.md) for what it does today and what is planned.
 
 ## Layout
@@ -9,14 +9,14 @@ A native iPhone app for Mainloop's owner, laid out for iPhone Duo. See
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `project.yml`                        | XcodeGen spec, the source of truth. The generated `Mainloop.xcodeproj`, `App/Info.plist` and `App/Mainloop.entitlements` are gitignored.                                                                                             |
 | `Config/Mainloop.xcconfig`           | Placeholder bundle ID and origin, and the APNs environment per configuration. Includes `Config/Local.xcconfig` if it exists.                                                                                                         |
-| `App/`                               | SwiftUI screens: Needs you, Sessions, Settings, and the list-beside-detail layout for the inner screen.                                                                                                                              |
+| `App/`                               | The shell: first run, the web view and its message handler, the approval sheet and This iPhone, in the web's theme.                                                                                                                  |
 | `Tests/`                             | App tests, run on the simulator.                                                                                                                                                                                                     |
-| `Packages/MainloopKit`               | Everything that doesn't need UIKit: `MainloopAPI` (the generated client) and `MainloopCore` (models, fictional fixtures, layout math). Its tests run on macOS with `swift test`.                                                     |
+| `Packages/MainloopKit`               | Everything that doesn't need UIKit: `MainloopAPI` (the generated client) and `MainloopCore` (keys, signing, the approval flow, the shell's rules, the palette). Its tests run on macOS with `swift test`.                            |
 | `Packages/MainloopKit/.../Generated` | The Swift client generated from `api/openapi.yaml`. Do not edit; run `scripts/generate-api.sh`.                                                                                                                                      |
 | `Packages/APIGen`                    | Pins swift-openapi-generator, and `PrepareContract`, which rewrites a temporary copy of the contract into a form the generator reads (nullable `anyOf: [X, null]` becomes an optional `X`; integer bounds beyond Int64 are dropped). |
 | `scripts/generate-api.sh`            | Regenerates the client. Add an operation to `Packages/APIGen/openapi-generator-config.yaml` first.                                                                                                                                   |
 | `scripts/ci.sh`                      | What CI runs: regenerate the client (a stale committed copy is a warning on pull requests and a failure on main, with a patch artifact; see AGENTS.md), `swift test`, then the simulator build and tests.                            |
-| `Design/make-app-icon.py`            | Draws the placeholder app icon (standard library only).                                                                                                                                                                              |
+| `Design/make-app-icon.py`            | Draws the app icon from the web's mark (standard library only).                                                                                                                                                                      |
 
 ## Build
 
@@ -36,7 +36,7 @@ xcodegen generate
 open Mainloop.xcodeproj
 ```
 
-The app builds with the placeholder origin and shows sample data. To run it on a phone, copy
+The app builds with the placeholder origin and says it names no server. To run it on a phone, copy
 `Config/Local.xcconfig.example` to `Config/Local.xcconfig` and set your team ID, bundle ID and
 Mainloop origin. Nothing in `Local.xcconfig` is committed. To sign in, also set the Pocket ID
 issuer and the app's OIDC client: a public client (PKCE, no secret) with the redirect URI
@@ -65,4 +65,6 @@ don't need there.
 
 - The API is called only through the generated client, as in `web/`.
 - Fixtures, previews and screenshots use fictional data only.
+- The page in the web view never gets a key, a signature or the session's token; anything signed
+  is done natively (docs/specs/ios-app.md).
 - No signing material in the tree or in CI logs; CI builds unsigned.

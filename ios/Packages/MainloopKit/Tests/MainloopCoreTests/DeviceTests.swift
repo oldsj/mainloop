@@ -69,6 +69,11 @@ func verifies(_ token: String, key: P256.Signing.PublicKey) -> Bool {
 
 let deviceID = "dev_0123456789abcdefghijklmnop"
 let origin = URL(string: "https://mainloop.example.test")!
+/// `GET /devices/current`'s answer: the calls these tests sign.
+let currentDeviceJSON = """
+{"id":"\(deviceID)","name":"Test iPhone","platform":"ios","key_thumbprint":"abc",
+ "created_at":"2026-11-24T12:00:00Z","last_seen_at":null,"revoked_at":null,"current":true}
+"""
 
 func bodyHash(_ data: Data) -> String { Base64URL.encode(Data(SHA256.hash(data: data))) }
 
@@ -201,19 +206,19 @@ let digest = "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
 
 @Suite struct DeviceSigningMiddlewareTests {
     @Test func aReadIsSignedForItsPathWithoutTheAPIPrefix() async throws {
-        let transport = FakeTransport(json: "[]")
+        let transport = FakeTransport(json: currentDeviceJSON)
         let signer = SoftwareSigner()
         let credential = DeviceCredential(deviceID: deviceID, origin: origin, keyKind: .software, keyData: signer.key.rawRepresentation)
         let client = try DeviceEnrollment.client(for: credential, transport: transport)
 
-        _ = try await client.listDevices()
+        _ = try await client.getCurrentDevice()
 
         let sent = try #require(await transport.sent.first)
         #expect(sent.baseURL.absoluteString == "https://mainloop.example.test/api")
         #expect(sent.request.headerFields[ClientHeaderMiddleware.name] == "ios")
         let claims = try DecodedToken(try bearer(sent), key: signer.key.publicKey).claims
         #expect(claims["htm"] as? String == "GET")
-        #expect(claims["htu"] as? String == "/devices")
+        #expect(claims["htu"] as? String == "/devices/current")
         #expect(claims["bh"] as? String == bodyHash(Data()))
     }
 
@@ -236,13 +241,13 @@ let digest = "f16d05ec6b29248d2c61adb1e9263f78e4f7bace1b955014a2d17872cfe4064d"
     }
 
     @Test func twoRequestsNeverShareAToken() async throws {
-        let transport = FakeTransport(json: "[]")
+        let transport = FakeTransport(json: currentDeviceJSON)
         let signer = SoftwareSigner()
         let client = MainloopAPI.client(
             origin: origin, middlewares: [DeviceSigningMiddleware(deviceID: deviceID, origin: origin, signer: signer)], transport: transport
         )
-        _ = try await client.listDevices()
-        _ = try await client.listDevices()
+        _ = try await client.getCurrentDevice()
+        _ = try await client.getCurrentDevice()
         let sent = await transport.sent
         let jtis = try sent.map { try DecodedToken(try bearer($0), key: signer.key.publicKey).claims["jti"] as? String }
         #expect(jtis.count == 2 && jtis[0] != jtis[1])
@@ -470,19 +475,19 @@ let fixtureOrigin = URL(string: "https://mainloop.test")!
     }
 
     @Test func anUnregisteredPhoneSendsNoCredential() async throws {
-        let transport = FakeTransport(json: "[]")
-        _ = try await client(DeviceAccount(store: MemoryCredentialStore()), transport).listDevices()
+        let transport = FakeTransport(json: currentDeviceJSON)
+        _ = try await client(DeviceAccount(store: MemoryCredentialStore()), transport).getCurrentDevice()
         #expect(await transport.sent.first?.request.headerFields[.authorization] == nil)
     }
 
     @Test func aRegisteredPhoneSignsFromTheNextRequest() async throws {
         let account = DeviceAccount(store: MemoryCredentialStore())
-        let transport = FakeTransport(json: "[]")
+        let transport = FakeTransport(json: currentDeviceJSON)
         let api = client(account, transport)
         let key = NewDeviceKey.software()
         try account.save(DeviceCredential(deviceID: deviceID, origin: origin, keyKind: .software, keyData: key.data))
 
-        _ = try await api.listDevices()
+        _ = try await api.getCurrentDevice()
 
         let sent = try #require(await transport.sent.first)
         let publicKey = try P256.Signing.PublicKey(rawRepresentation: #require(Base64URL.decode(key.signer.publicJWK.x)) + #require(Base64URL.decode(key.signer.publicJWK.y)))
@@ -491,8 +496,8 @@ let fixtureOrigin = URL(string: "https://mainloop.test")!
 
     @Test func aKeyNeverSignsForAnotherOrigin() async throws {
         let store = MemoryCredentialStore(DeviceCredential(deviceID: deviceID, origin: origin, keyKind: .software, keyData: NewDeviceKey.software().data))
-        let transport = FakeTransport(json: "[]")
-        _ = try await client(DeviceAccount(store: store), transport, origin: URL(string: "https://other.example.test")!).listDevices()
+        let transport = FakeTransport(json: currentDeviceJSON)
+        _ = try await client(DeviceAccount(store: store), transport, origin: URL(string: "https://other.example.test")!).getCurrentDevice()
         #expect(await transport.sent.first?.request.headerFields[.authorization] == nil)
     }
 
