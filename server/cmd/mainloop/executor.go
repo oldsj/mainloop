@@ -63,7 +63,7 @@ func serveExecutor(ctx context.Context, log *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("executor: MAINLOOP_EXECUTOR_OMNI_KEY: %w", err)
 		}
-		svc.Sidero = privileged.ExecSidero{Endpoint: cfg.OmniEndpoint, Key: key, Dir: os.TempDir()}
+		svc.Sidero = privileged.ExecSidero{Endpoint: cfg.OmniEndpoint, Key: key, Clusters: cfg.OmniClusters, Dir: os.TempDir()}
 		svc.OmniClusters = cfg.OmniClusters
 	}
 	r := &privileged.Runner{Service: svc}

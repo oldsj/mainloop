@@ -1,6 +1,7 @@
 package privileged
 
 import (
+	"bytes"
 	"context"
 	"os/exec"
 	"regexp"
@@ -70,8 +71,8 @@ func TestSideroRealBinaries(t *testing.T) {
 				t.Fatal(err)
 			}
 			omni, upstream := startFakeOmni(t, real)
-			omni.reply = func(string, []byte) []byte { return nil }
-			e := ExecSidero{Endpoint: "https://omni.example.com", Key: real, Binaries: map[string]string{tc.tool: bin}, Dir: t.TempDir(), Upstream: upstream}
+			omni.reply = testWorld().reply
+			e := ExecSidero{Endpoint: "https://omni.example.com", Key: real, Clusters: []string{"internal-01"}, Binaries: map[string]string{tc.tool: bin}, Dir: t.TempDir(), Upstream: upstream}
 			out, err := e.Run(context.Background(), SideroRun{Tool: tc.tool, Cluster: "internal-01", Argv: tc.argv, Timeout: 30 * time.Second})
 			if err != nil {
 				t.Fatal(err)
@@ -80,9 +81,13 @@ func TestSideroRealBinaries(t *testing.T) {
 			if !slices.ContainsFunc(calls, func(c omniCall) bool { return c.method == tc.method }) {
 				t.Fatalf("Omni saw %+v; the tool said %s %s", calls, out.Stdout, out.Stderr)
 			}
+			machines := cosiList(omniDefaultNamespace, omniClusterMachineIDs)
 			for _, c := range calls {
 				if c.sigErr != nil {
 					t.Errorf("%s: %v", c.method, c.sigErr)
+				}
+				if bytes.Equal(c.body, machines) {
+					continue // the proxy's own lookup, of Omni
 				}
 				for k, v := range tc.md {
 					if !slices.Equal(c.md.Get(k), []string{v}) {

@@ -27,6 +27,9 @@ type ExecSidero struct {
 	Endpoint string
 	// Key is the executor's Omni service account.
 	Key *serviceaccount.ServiceAccount
+	// Clusters are the clusters the executor acts on: omnictl writes and sees only theirs, and
+	// talosctl reaches only its target's machines.
+	Clusters []string
 	// Binaries are the tools' paths; a missing one is found on PATH.
 	Binaries map[string]string
 	// Dir is where each run's directory is made (the executor's /tmp).
@@ -72,7 +75,7 @@ func (e ExecSidero) Run(ctx context.Context, run SideroRun) (CommandOutput, erro
 		defer func() { _ = conn.Close() }()
 		upstream = conn
 	}
-	proxy, err := newSideroProxy(e.Key, upstream, run.Tool, run.Cluster, run.Preflight, run.Timeout+time.Hour)
+	proxy, err := newSideroProxy(e.Key, upstream, run.Tool, run.Cluster, e.Clusters, run.Preflight, run.Timeout+time.Hour)
 	if err != nil {
 		return CommandOutput{}, err
 	}

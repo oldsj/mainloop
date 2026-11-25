@@ -253,13 +253,14 @@ one fits: it observes its target and retries, and this does neither.
 
 `command.omnictl {argv, stdin, timeout_seconds}` and `command.talosctl {target, argv,
 timeout_seconds}` run one omnictl or talosctl command through Omni as the executor's Omni service
-account, whose role is Admin: for Omni resources (config patches, clusters) and for Talos nodes
+account, whose role is Admin: for Omni resources (clusters, machine sets) and for Talos nodes
 (reboots, upgrades, etcd).
 
 - `argv` starts with `omnictl` or `talosctl` and then its command, run as is without a shell: at
   most 64 words and 8 KiB. `stdin` is what `omnictl apply --file=-` reads, up to 64 KiB.
   `timeout_seconds` is 1 to 600, default 60. talosctl's `target` is an Omni cluster from
-  `executor.omni.clusters`; another is refused at preflight. omnictl takes no target.
+  `executor.omni.clusters`; another is refused at preflight. omnictl takes no target: it acts on
+  Omni, held to those same clusters (below).
 - Neither tool holds the service account's key. For each run the executor makes a key of its own
   and a proxy on loopback (TLS with a certificate made for the run) that checks each call is signed
   by that key, then signs it again with the real one and forwards it to Omni with only the routing
@@ -267,22 +268,45 @@ account, whose role is Admin: for Omni resources (config patches, clusters) and 
   only the proxy's certificate, and `PATH`, `HOME` and its config paths, in a fresh directory. A
   flag or configuration that sent it elsewhere would send nothing Omni accepts. The run's key is
   removed from the output, the session redactor runs over it, and each stream is kept to 64 KiB.
-- The proxy refuses, for every command, with `refused by the executor`: any method but the reads
-  and writes the allowed commands use (no kubeconfig, talosconfig, service account, support
-  bundle, file read, client certificate, config apply or etcd snapshot); a resource type that may
-  hold a secret (Omni's cluster secrets, machine configs, kubeconfigs, talosconfigs, join tokens,
-  identities, users, access policies, backups, encryption and BMC settings; Talos's machine
-  configs and its `secrets` namespace), named in a request or in a resource it writes; a request
-  that repeats or retypes the fields naming them; an `authorization` header; Talos routing headers
-  on an omnictl run; and a talosctl call to Omni itself, or for another cluster than the target.
+- The proxy refuses, for every command, with `refused by the executor`:
+  - any method but the reads and writes the allowed commands use (no kubeconfig, talosconfig,
+    service account, support bundle, file read, client certificate, config apply or etcd snapshot);
+  - a resource type, named in a request or in a resource it writes, that is not on the executor's
+    allowlist of types an operator reads: Omni's clusters, machine sets, machines and their
+    statuses, upgrade and etcd backup statuses; Talos's members, addresses, routes, links, disks,
+    volumes, services, etcd members, node and hardware statuses. Nothing that holds a credential is
+    on it: not Omni's config patches, configs, Siderolink config, join tokens, kubeconfigs,
+    talosconfigs or secrets, nor Talos's machine config, link specs, registry config, manifests,
+    KubeSpan and discovery configs, volume configs, extension service configs or Siderolink config;
+  - a type whose resource definition, read from Omni or the node with the executor's key, marks it
+    sensitive, or whose definition cannot be read; and, as a second check, a type whose name
+    matches the secret-bearing words (secret, token, key, identity, config…) or the `secrets`
+    namespace;
+  - a request that repeats or retypes the fields naming them; an `authorization` header; Talos
+    routing headers on an omnictl run;
+  - a talosctl call to Omni itself, for another cluster than the target, with no node, or for a
+    node that is not a machine of the target in Omni (by address, node name or machine ID, from
+    Omni's ClusterMachineIdentities, read once per run): Omni routes a node given by address, so
+    the cluster header alone does not hold a request to the cluster. talosctl writes no resource;
+  - an omnictl write (create, update, destroy, teardown) of a resource that does not belong to one
+    of `executor.omni.clusters`, by its `omni.sidero.dev/cluster` label, or by its ID for the types
+    named by their cluster: the proxy reads the resource it replaces or destroys from Omni first.
+    A resource of no cluster (a machine class, a machine's labels) is refused: no global change;
+  - in omnictl's answers, any resource of another cluster: a list or watch leaves it out, and a
+    get is refused. Omni may manage clusters the executor does not act on, and omnictl sees none
+    of theirs;
+  - `machine-logs` of a machine that is not in those clusters, and `talosctl upgrade` to an image
+    that is not from `factory.talos.dev` or `ghcr.io/siderolabs`.
+
   Before approval it forwards reads only.
+
 - Refused when requested (`[validation]`): argv is read by a strict subset of both tools' grammar,
   so it reads every word as the binary will: the command's words, then long flags only, as
   `--name` or `--name=value`, and words that do not start with `-`. Short flags, `--`, a flag
   given twice, a value starting with `-`, a flag name with `_` or capitals, and control or
   invisible characters are refused. Then an allowlist holds, each command with its own flags:
   - omnictl: `get`, `cluster status`, `machine-logs` (reads); `apply --file=-` and `cluster delete`
-    (changes with a dry run); `delete`.
+    (changes with a dry run); `delete <type> <id>`, one resource by name, with no selector.
   - talosctl, which always needs `--nodes=`: `version`, `get`, `service`, `logs`, `dmesg`,
     `etcd members|status|alarm list`, `containers`, `stats`, `memory`, `processes`, `mounts`,
     `netstat`, `time`, `list` (reads); `reboot`, `shutdown`, `reset` and `upgrade` (each with
@@ -291,19 +315,28 @@ account, whose role is Admin: for Omni resources (config patches, clusters) and 
 
   No list holds a flag that chooses the endpoint, cluster, configuration or credential
   (`--omniconfig`, `--talosconfig`, `--context`, `--cluster`, `--endpoints`, `--insecure*`), a
-  watch or follow, `--dry-run` or `--debug`. Also refused: `get` or `delete` of a type that may
-  hold a secret, `get` in the `secrets` namespace, a resource in stdin of such a type or with no
-  type, and argv or stdin that looks like a credential (`contains_secret`). A type alias the rule
-  does not catch is caught by the proxy, which sees the full type.
+  watch or follow, `--dry-run` or `--debug`. `talosctl upgrade --image=` takes an image from
+  `factory.talos.dev` or `ghcr.io/siderolabs` only. Also refused: `get` or `delete` of a type
+  that is not on the allowlist, given by its full name, its plural or its singular (`clusters`,
+  `cluster`, `Clusters.omni.sidero.dev`; not an abbreviation such as `mc`), or that may hold a
+  secret; `get` in the `secrets` namespace; a resource in stdin of a type not on the allowlist or
+  with no type; and argv or stdin that looks like a credential (`contains_secret`).
+
+- Refused at preflight: `omnictl cluster status` or `cluster delete` of a cluster not in
+  `executor.omni.clusters`, and a resource in stdin that belongs to none of them (label it
+  `omni.sidero.dev/cluster`). The proxy checks every write again when it runs.
 
 - Preflight previews `omnictl apply` and `omnictl cluster delete` by running them with
   `--dry-run`, through the proxy forwarding reads only, and the card shows what they printed, 16
   KiB at most. A dry run that fails is refused with its exit code and the gRPC code, or that the
   proxy refused it, not the tool's message; the executor's log keeps it. A read has nothing to
   preview. Every other change cannot be previewed, and the card says so.
-- The card shows the exact command, the stdin, the preview, and tags: what it changes, destructive
+- The card shows the exact command, the stdin, the preview, and tags: what it changes (an upgrade
+  to a named image says it installs that image as the node's operating system), destructive
   (`delete`, `cluster delete`, `shutdown`, `reset`, `etcd leave`, `etcd remove-member`), the
-  number of nodes, no preview, and always Omni Admin. A destructive command waits 1 hour for the
+  number of nodes, no preview, and always Omni Admin. It says how the proxy bounds the command:
+  a talosctl command goes only to the target's machines; an omnictl command is held to the
+  executor's clusters, though Omni may manage others. A destructive command waits 1 hour for the
   owner.
 - The agent's view of the facts has the preview kind, not the dry run's text.
 

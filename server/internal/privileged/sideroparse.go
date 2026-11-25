@@ -27,6 +27,9 @@ type sideroFlag struct {
 	values []string
 	// require, if set, is the one value the flag must be given, and it must be given.
 	require string
+	// check, if set, says whether a value is allowed; hint says what is.
+	check func(string) bool
+	hint  string
 }
 
 var (
@@ -72,8 +75,10 @@ var sideroCommands = map[string]map[string]sideroSpec{
 		"apply": {preview: PreviewDryRun, dryRun: true, stdin: true, effect: "creates or updates Omni resources", flags: map[string]sideroFlag{
 			"file": {value: true, require: "-"}, "verbose": switchFlag,
 		}},
-		"delete": {preview: PreviewNone, args: [2]int{1, 2}, destructive: "deletes Omni resources", flags: map[string]sideroFlag{
-			"namespace": valueFlag, "selector": valueFlag,
+		// delete names one resource: the executor's proxy reads it to check its cluster, which a
+		// selector's sweep would not allow before it ran.
+		"delete": {preview: PreviewNone, args: [2]int{2, 2}, destructive: "deletes an Omni resource", flags: map[string]sideroFlag{
+			"namespace": valueFlag,
 		}},
 		"cluster delete": {preview: PreviewDryRun, dryRun: true, args: [2]int{1, 1}, destructive: "deletes the cluster", flags: map[string]sideroFlag{
 			"verbose": switchFlag, "destroy-disconnected-machines": switchFlag,
@@ -128,7 +133,8 @@ func resetFlags() map[string]sideroFlag {
 
 func upgradeFlags() map[string]sideroFlag {
 	return map[string]sideroFlag{
-		"wait": noWait, "image": {value: true}, "stage": switchFlag, "force": switchFlag, "preserve": switchFlag,
+		"wait": noWait, "image": {value: true, check: talosImage, hint: "an installer image from factory.talos.dev or ghcr.io/siderolabs"},
+		"stage": switchFlag, "force": switchFlag, "preserve": switchFlag,
 		"reboot-mode": {value: true, values: []string{"default", "powercycle"}},
 	}
 }
@@ -155,6 +161,8 @@ type sideroCommand struct {
 	// flags are the flags given, by name, without the leading dashes.
 	flags map[string]string
 	nodes []string
+	// resourceType is the canonical type get or delete names.
+	resourceType string
 }
 
 func (c sideroCommand) on(name string) bool { v, ok := c.flags[name]; return ok && v != "false" }
@@ -172,6 +180,9 @@ func (c sideroCommand) preview() string {
 func (c sideroCommand) effect() string {
 	if c.tool == ToolTalosctl && c.path == "service" && c.preview() == PreviewNone {
 		return c.words[1] + "s a service"
+	}
+	if image, ok := c.flags["image"]; ok && c.path == "upgrade" {
+		return "installs " + image + " as the node's operating system, which then has full control of the node, and reboots it"
 	}
 	return c.spec.effect
 }
@@ -265,8 +276,15 @@ func parseSidero(tool string, argv []string) (sideroCommand, error) {
 			return c, invalidf("talosctl service <id> takes start, stop, restart or status")
 		}
 	}
-	if (c.path == "get" || c.path == "delete") && len(c.words) > 0 && secretType(c.words[0]) {
-		return c, invalidf("%s may hold secrets: the executor never reads or writes it", c.words[0])
+	if (c.path == "get" || c.path == "delete") && len(c.words) > 0 {
+		if secretType(c.words[0]) {
+			return c, invalidf("%s may hold secrets: the executor never reads or writes it", c.words[0])
+		}
+		t, ok := sideroTypeFor(tool, c.words[0])
+		if !ok {
+			return c, invalidf("%s is not a resource type the executor reads; give one of these by its full name: %s", c.words[0], typeNames(tool))
+		}
+		c.resourceType = t
 	}
 	if c.path == "get" && slices.Contains(secretNamespaces, c.flags["namespace"]) {
 		return c, invalidf("the %s namespace holds secrets: the executor never reads it", c.flags["namespace"])
@@ -313,6 +331,8 @@ func (c *sideroCommand) flag(name, value string, hasValue bool) error {
 		return invalidf("--%s: the value is over 256 characters", name)
 	case f.values != nil && !slices.Contains(f.values, value):
 		return invalidf("--%s takes %s", name, strings.Join(f.values, ", "))
+	case f.check != nil && !f.check(value):
+		return invalidf("--%s takes %s", name, f.hint)
 	}
 	c.flags[name] = value
 	return nil

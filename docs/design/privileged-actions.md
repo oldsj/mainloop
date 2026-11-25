@@ -443,7 +443,11 @@ ServiceAccounts. The ops agent requests writes through these.
 **Slice 3b: home-network hosts.** `command.talosctl`, `command.omnictl`, `command.ssh` and
 `http.unifi`. As built, the first two went first: both go through Omni with one Admin service
 account that only a re-signing proxy in the executor holds (docs/specs/privileged-actions.md), so
-they need no network reach but Omni's endpoint and no Talos credential. Then `command.ssh` and
+they need no network reach but Omni's endpoint and no Talos credential. The proxy lets them name
+only an allowlist of resource types, refuses a type its resource definition marks sensitive, holds
+omnictl to `executor.omni.clusters` (writes, and what it shows) and talosctl to its target's
+machines as Omni lists them, and upgrades only to Sidero's images: a security review found that a
+rule over type names alone missed types that hold secrets. Then `command.ssh` and
 `http.unifi`, with the host allowlist and the egress policy, once the owner has created the items in §3
 and approved the executor's source address and its router rules (§3, Network reach).
 

@@ -9,6 +9,7 @@ import (
 	"net"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/siderolabs/go-api-signature/pkg/message"
@@ -30,13 +31,18 @@ import (
 // the proxy checks that signature, applies its rules, and signs again with the real key before
 // forwarding to Omni. Its rules hold whatever the command asked:
 //   - only the methods the allowed commands use, by name; in preflight, only reads;
-//   - no request naming a resource type that may hold a secret (secretType), or a secrets
-//     namespace, read or write;
-//   - a talosctl run reaches only its target cluster; an omnictl run reaches only Omni;
+//   - only the resource types the executor reads (sideroReadable), never one whose resource
+//     definition the server marks sensitive, nor one secretType matches, nor a secrets namespace;
+//   - a talosctl run reaches only its target cluster's nodes, as Omni lists its machines, and
+//     writes no resource; an omnictl run reaches only Omni, writes only resources of the clusters
+//     the executor acts on, and sees none of another cluster's;
+//   - machine logs of those clusters' machines only, and upgrades to Sidero's images only;
 //   - one request message per call, and no authorization header.
 type sideroProxy struct {
-	tool      string
-	cluster   string
+	tool    string
+	cluster string
+	// clusters are the clusters the run may act on: talosctl's target, or omnictl's list.
+	clusters  []string
 	preflight bool
 	real      *serviceaccount.ServiceAccount
 	upstream  *grpc.ClientConn
@@ -47,13 +53,19 @@ type sideroProxy struct {
 	runKeyB64 string
 	tls       *tls.Config
 	caPEM     []byte
+
+	mu sync.Mutex
+	// sensitivity caches resource definitions by node and type; clusterMachines, the clusters'
+	// machines, once read.
+	sensitivity     map[string]bool
+	clusterMachines *clusterMachines
 }
 
 const sideroRunIdentity = "mainloop-executor-run"
 
 // newSideroProxy makes the proxy for one run. upstream is the connection to Omni; the proxy does
-// not close it.
-func newSideroProxy(real *serviceaccount.ServiceAccount, upstream *grpc.ClientConn, tool, cluster string, preflight bool, lifetime time.Duration) (*sideroProxy, error) {
+// not close it. clusters are the clusters omnictl may act on; talosctl acts on cluster only.
+func newSideroProxy(real *serviceaccount.ServiceAccount, upstream *grpc.ClientConn, tool, cluster string, clusters []string, preflight bool, lifetime time.Duration) (*sideroProxy, error) {
 	key, err := pgp.GenerateKey(sideroRunIdentity, "", sideroRunIdentity+"@executor.invalid", lifetime)
 	if err != nil {
 		return nil, fmt.Errorf("sidero proxy: run key: %w", err)
@@ -66,8 +78,12 @@ func newSideroProxy(real *serviceaccount.ServiceAccount, upstream *grpc.ClientCo
 	if err != nil {
 		return nil, fmt.Errorf("sidero proxy: certificate: %w", err)
 	}
+	if tool == ToolTalosctl {
+		clusters = []string{cluster}
+	}
 	return &sideroProxy{
-		tool: tool, cluster: cluster, preflight: preflight, real: real, upstream: upstream,
+		tool: tool, cluster: cluster, clusters: slices.Clone(clusters), preflight: preflight, real: real, upstream: upstream,
+		sensitivity: map[string]bool{},
 		runName: sideroRunIdentity, runKey: key, runKeyB64: b64,
 		tls:   &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
 		caPEM: caPEM,
@@ -149,27 +165,42 @@ func (p *sideroProxy) handle(_ any, ss grpc.ServerStream) error {
 	if err := ss.RecvMsg(&extra); !errors.Is(err, io.EOF) {
 		return refusedBy("one request message per call")
 	}
-	if strings.HasPrefix(method, cosiState) {
-		ns, typ, err := cosiTarget(strings.TrimPrefix(method, cosiState), req)
-		if err != nil {
-			return refusedBy("%s: %v", method, err)
-		}
-		if secretType(typ) || slices.Contains(secretNamespaces, ns) {
-			return refusedBy("%s may hold secrets", typ)
-		}
-	}
-
 	out := metadata.MD{}
 	for _, k := range forwardHeaders {
 		if v := md.Get(k); len(v) > 0 {
 			out.Set(k, v...)
 		}
 	}
-	msg := message.NewGRPC(out, method)
+	if err := p.check(ss.Context(), method, out, req); err != nil {
+		return err
+	}
+	call, filtered := strings.CutPrefix(method, cosiState)
+	filtered = filtered && p.tool == ToolOmnictl
+	return p.upstreamCall(ss.Context(), method, out, req, func(resp []byte) error {
+		if filtered {
+			var err error
+			if resp, err = p.filter(call, resp); err != nil {
+				if grpcstatus.Code(err) == codes.PermissionDenied {
+					return err
+				}
+				return refusedBy("an answer from Omni cannot be read to check its cluster")
+			}
+			if resp == nil {
+				return nil
+			}
+		}
+		return ss.SendMsg(&resp)
+	})
+}
+
+// upstreamCall makes one call upstream, signed with the executor's key, with the given headers,
+// and passes each answer to recv.
+func (p *sideroProxy) upstreamCall(ctx context.Context, method string, md metadata.MD, req []byte, recv func([]byte) error) error {
+	msg := message.NewGRPC(md.Copy(), method)
 	if err := msg.Sign(p.real.Name, p.real.Key); err != nil {
 		return grpcstatus.Error(codes.Internal, "the executor could not sign the request")
 	}
-	ctx, cancel := context.WithCancel(metadata.NewOutgoingContext(ss.Context(), msg.Metadata))
+	ctx, cancel := context.WithCancel(metadata.NewOutgoingContext(ctx, msg.Metadata))
 	defer cancel()
 	cs, err := p.upstream.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true, ClientStreams: true}, method, grpc.ForceCodec(rawCodec{}))
 	if err != nil {
@@ -188,7 +219,7 @@ func (p *sideroProxy) handle(_ any, ss grpc.ServerStream) error {
 		} else if err != nil {
 			return err
 		}
-		if err := ss.SendMsg(&resp); err != nil {
+		if err := recv(resp); err != nil {
 			return err
 		}
 	}

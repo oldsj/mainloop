@@ -124,12 +124,49 @@ func checkOmniResources(s string) error {
 			return invalidf("resource %d of stdin has no metadata.type", n)
 		case secretType(t):
 			return invalidf("resource %d of stdin is a %s, which may hold secrets: the executor never writes it", n, t)
+		case !slices.Contains(omniReadable, t):
+			return invalidf("resource %d of stdin is a %s, which is not a type the executor writes (it writes: %s)", n, t, typeNames(ToolOmnictl))
 		}
 	}
 	if n == 0 {
 		return invalidf("stdin holds no resource")
 	}
 	return nil
+}
+
+// checkOmniClusters refuses an omnictl command for a cluster the executor does not act on, or
+// resources to apply that belong to none of them. The executor's proxy checks every write again.
+func checkOmniClusters(c sideroCommand, stdin string, clusters []string) error {
+	if (c.path == "cluster status" || c.path == "cluster delete") && !slices.Contains(clusters, c.words[0]) {
+		return refuse("cluster %q is not one this executor acts on (%s)", c.words[0], strings.Join(clusters, ", "))
+	}
+	if stdin == "" {
+		return nil
+	}
+	dec := utilyaml.NewYAMLOrJSONDecoder(strings.NewReader(stdin), 4096)
+	for n := 1; ; n++ {
+		var r struct {
+			Metadata struct {
+				Type   string            `json:"type"`
+				ID     string            `json:"id"`
+				Labels map[string]string `json:"labels"`
+			} `json:"metadata"`
+		}
+		if err := dec.Decode(&r); errors.Is(err, io.EOF) {
+			return nil
+		} else if err != nil {
+			return invalidf("stdin: %s", err.Error())
+		}
+		cluster, ok := omniClusterOf(r.Metadata.Type, r.Metadata.ID, r.Metadata.Labels)
+		switch {
+		case !ok:
+			return refuse("resource %d of stdin (%s %s) belongs to no cluster: label it %s=<cluster>; the executor changes only resources of %s",
+				n, r.Metadata.Type, r.Metadata.ID, omniClusterLabel, strings.Join(clusters, ", "))
+		case !slices.Contains(clusters, cluster):
+			return refuse("resource %d of stdin (%s %s) belongs to cluster %q, which this executor does not act on (%s)",
+				n, r.Metadata.Type, r.Metadata.ID, cluster, strings.Join(clusters, ", "))
+		}
+	}
 }
 
 func sideroExpiry(tool string) func(args any) time.Duration {
@@ -149,6 +186,8 @@ func sideroExpiry(tool string) func(args any) time.Duration {
 type SideroFacts struct {
 	Tool    string `json:"tool"`
 	Cluster string `json:"cluster,omitempty"`
+	// Clusters are the clusters an omnictl command is held to.
+	Clusters []string `json:"clusters,omitempty"`
 	// Preview is PreviewDryRun, PreviewRead or PreviewNone.
 	Preview string `json:"preview"`
 	// Output is a dry run's text, as the tool prints it.
@@ -188,9 +227,21 @@ func preflightSidero(tool string) func(ctx context.Context, s *Service, raw json
 		case tool == ToolTalosctl && !slices.Contains(s.OmniClusters, a.Target):
 			return nil, refuse("target %q is not a cluster this executor may act on (%s)", a.Target, strings.Join(s.OmniClusters, ", "))
 		}
+		if tool == ToolOmnictl {
+			c, err := parseSidero(tool, a.Argv)
+			if err != nil {
+				return nil, err
+			}
+			if err := checkOmniClusters(c, a.Stdin, s.OmniClusters); err != nil {
+				return nil, err
+			}
+		}
 		f, err := s.sideroPreview(ctx, tool, a)
 		if err != nil {
 			return nil, err
+		}
+		if tool == ToolOmnictl {
+			f.Clusters = slices.Clone(s.OmniClusters)
 		}
 		f.CheckedAt = now
 		return f, nil
@@ -266,6 +317,12 @@ func renderSidero(r dbq.PrivilegedAction, ctx map[string]any) (string, string, m
 		b.WriteString("Runs exactly this, once, as the executor's Omni service account (role Admin) (no shell; the executor sets the endpoint and credential):\n")
 	}
 	b.WriteString(fenced("sh", shellQuote(a.Argv)))
+	if f.Tool == ToolTalosctl {
+		fmt.Fprintf(&b, "The executor's proxy sends it only to nodes that Omni lists as machines of %s.\n", f.Cluster)
+	} else {
+		fmt.Fprintf(&b, "Omni may manage other clusters too; the executor's proxy holds this to %s: it changes only their resources, and shows nothing of another cluster's.\n",
+			strings.Join(f.Clusters, ", "))
+	}
 	if a.Stdin != "" {
 		b.WriteString("With these resources (--file=- reads them):\n" + fenced("yaml", a.Stdin))
 	}

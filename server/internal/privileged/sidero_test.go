@@ -50,25 +50,29 @@ func newSideroEnv(t *testing.T, handle func(run privileged.SideroRun) privileged
 	return e, f
 }
 
-const patchYAML = "metadata:\n  namespace: default\n  type: ConfigPatches.omni.sidero.dev\n  id: 400-widgets-sysctls\nspec:\n  data: |\n    machine:\n      sysctls:\n        vm.max_map_count: \"262144\"\n"
+const patchYAML = "metadata:\n  namespace: default\n  type: MachineSets.omni.sidero.dev\n  id: test-cluster-workers\n  labels:\n    omni.sidero.dev/cluster: test-cluster\n    omni.sidero.dev/role-worker: \"\"\nspec:\n  machineallocation:\n    name: widgets\n    machinecount: 3\n"
 
-// applyPatch is omnictl apply: its dry run prints a diff; the real run applies.
+// applyPatch is omnictl apply of a machine set: its dry run prints a diff; the real run applies.
 func applyPatch(run privileged.SideroRun) privileged.CommandOutput {
 	if run.DryRun {
-		return privileged.CommandOutput{Stdout: []byte("Processing 1 resource file(s)\n+  vm.max_map_count: \"262144\"\n")}
+		return privileged.CommandOutput{Stdout: []byte("Processing 1 resource file(s)\n+    machinecount: 3\n")}
 	}
-	return privileged.CommandOutput{Stdout: []byte("Applied ConfigPatches.omni.sidero.dev(default/400-widgets-sysctls)\nkey " + runKeyFixture + "\n")}
+	return privileged.CommandOutput{Stdout: []byte("Applied MachineSets.omni.sidero.dev(default/test-cluster-workers)\nkey " + runKeyFixture + "\n")}
 }
 
 func omnictlArgs(argv ...string) map[string]any {
 	return map[string]any{"argv": append([]string{"omnictl"}, argv...)}
 }
 
+func omnictlApply(stdin string) map[string]any {
+	return map[string]any{"argv": []string{"omnictl", "apply", "--file=-"}, "stdin": stdin}
+}
+
 func talosctlArgs(argv ...string) map[string]any {
 	return map[string]any{"target": cluster, "argv": append([]string{"talosctl"}, argv...)}
 }
 
-// Given an Omni config patch, when main requests omnictl apply, then the card shows the command,
+// Given an Omni machine set, when main requests omnictl apply, then the card shows the command,
 // the resources and the tool's dry-run diff, and the agent's facts leave the diff out. After an
 // Approve the executor runs the dry run again, then the command once, and returns its output
 // without the run's key.
@@ -78,10 +82,11 @@ func TestOmnictlApplyShowsTheDryRunAndRunsOnce(t *testing.T) {
 	args["stdin"] = patchYAML
 	a := e.request(t, privileged.TypeOmnictl, "omni-1", args)
 	a, card := e.preflighted(t, a.ID)
-	cardHas(t, card, "Run omnictl apply through Omni", "omnictl apply --file=-", "400-widgets-sysctls",
-		"Its dry run, which only reads, says:", `+  vm.max_map_count: "262144"`, "runs the dry run again",
+	cardHas(t, card, "Run omnictl apply through Omni", "omnictl apply --file=-", "test-cluster-workers",
+		"the executor's proxy holds this to test-cluster: it changes only their resources",
+		"Its dry run, which only reads, says:", "+    machinecount: 3", "runs the dry run again",
 		"Risk: creates or updates Omni resources, Omni Admin.")
-	if seen := string(privileged.AgentFacts(a.Type, a.Facts)); strings.Contains(seen, "262144") || !strings.Contains(seen, "owner's card only") {
+	if seen := string(privileged.AgentFacts(a.Type, a.Facts)); strings.Contains(seen, "machinecount") || !strings.Contains(seen, "owner's card only") {
 		t.Errorf("the agent sees %s", seen)
 	}
 	if f.real() != 0 || len(f.runs) != 1 || f.runs[0].Stdin != patchYAML {
@@ -96,7 +101,7 @@ func TestOmnictlApplyShowsTheDryRunAndRunsOnce(t *testing.T) {
 		t.Fatalf("runs = %+v", f.runs)
 	}
 	res := kubectlResult(t, a)
-	if !strings.Contains(res.Stdout, "Applied ConfigPatches") || strings.Contains(res.Stdout, runKeyFixture) {
+	if !strings.Contains(res.Stdout, "Applied MachineSets") || strings.Contains(res.Stdout, runKeyFixture) {
 		t.Fatalf("result = %+v", res)
 	}
 }
@@ -106,7 +111,7 @@ func TestOmnictlIsStaleWhenTheDryRunDiffers(t *testing.T) {
 	moved := false
 	e, f := newSideroEnv(t, func(run privileged.SideroRun) privileged.CommandOutput {
 		if moved {
-			return privileged.CommandOutput{Stdout: []byte("+  vm.max_map_count: \"1\"\n")}
+			return privileged.CommandOutput{Stdout: []byte("+    machinecount: 1\n")}
 		}
 		return applyPatch(run)
 	})
@@ -131,7 +136,7 @@ func TestTalosctlRebootRunsOnceWithoutPreview(t *testing.T) {
 	a := e.request(t, privileged.TypeTalosctl, "talos-1", talosctlArgs("reboot", "--nodes=192.0.2.11", "--wait=false"))
 	a, card := e.preflighted(t, a.ID)
 	cardHas(t, card, "Run talosctl reboot on 192.0.2.11 (test-cluster) through Omni", "talosctl reboot --nodes=192.0.2.11 --wait=false",
-		"Nothing can preview it", "Risk: reboots the node, no preview, Omni Admin.")
+		"only to nodes that Omni lists as machines of test-cluster", "Nothing can preview it", "Risk: reboots the node, no preview, Omni Admin.")
 	if len(f.runs) != 0 {
 		t.Fatalf("preflight ran %+v", f.runs)
 	}
@@ -151,6 +156,16 @@ func TestTalosctlRebootRunsOnceWithoutPreview(t *testing.T) {
 	}
 }
 
+// An upgrade to an image the requester names says so on the card: the image runs as the node's
+// operating system.
+func TestTalosctlUpgradeImageIsTagged(t *testing.T) {
+	e, _ := newSideroEnv(t, applyPatch)
+	image := "factory.talos.dev/metal-installer/" + strings.Repeat("ab", 32) + ":v1.14.5"
+	a := e.request(t, privileged.TypeTalosctl, "up-1", talosctlArgs("upgrade", "--nodes=192.0.2.11", "--wait=false", "--image="+image))
+	_, card := e.preflighted(t, a.ID)
+	cardHas(t, card, "Risk: installs "+image+" as the node's operating system, which then has full control of the node, and reboots it")
+}
+
 // Deletes, resets and shutdowns expire in an hour; other commands as any undecided action.
 func TestSideroDestructiveCommandsExpireInAnHour(t *testing.T) {
 	for _, tc := range []struct {
@@ -160,7 +175,7 @@ func TestSideroDestructiveCommandsExpireInAnHour(t *testing.T) {
 	}{
 		{privileged.TypeTalosctl, talosctlArgs("reset", "--nodes=192.0.2.11", "--wait=false", "--graceful=false"), privileged.DeleteExpiry},
 		{privileged.TypeTalosctl, talosctlArgs("shutdown", "--nodes=192.0.2.11", "--wait=false"), privileged.DeleteExpiry},
-		{privileged.TypeOmnictl, omnictlArgs("delete", "configpatches", "400-widgets-sysctls"), privileged.DeleteExpiry},
+		{privileged.TypeOmnictl, omnictlArgs("delete", "machinesets", "test-cluster-workers"), privileged.DeleteExpiry},
 		{privileged.TypeTalosctl, talosctlArgs("etcd", "remove-member", "--nodes=192.0.2.11", "3a1f"), privileged.DeleteExpiry},
 		{privileged.TypeTalosctl, talosctlArgs("get", "members", "--nodes=192.0.2.11"), privileged.UndecidedExpiry},
 		{privileged.TypeTalosctl, talosctlArgs("reboot", "--nodes=192.0.2.11", "--wait=false"), privileged.UndecidedExpiry},
@@ -198,7 +213,7 @@ func TestSideroRequestRefusals(t *testing.T) {
 		{privileged.TypeTalosctl, talosctlArgs("get", "members", "--nodes", "192.0.2.11"), "--nodes takes a value"},
 		{privileged.TypeTalosctl, talosctlArgs("get", "machineconfig", "--nodes=192.0.2.11"), "may hold secrets"},
 		{privileged.TypeTalosctl, talosctlArgs("get", "osrootsecrets", "--nodes=192.0.2.11"), "may hold secrets"},
-		{privileged.TypeTalosctl, talosctlArgs("get", "x", "--nodes=192.0.2.11", "--namespace=secrets"), "the secrets namespace holds secrets"},
+		{privileged.TypeTalosctl, talosctlArgs("get", "members", "--nodes=192.0.2.11", "--namespace=secrets"), "the secrets namespace holds secrets"},
 		{privileged.TypeTalosctl, talosctlArgs("read", "/system/secrets/x", "--nodes=192.0.2.11"), "talosctl read is not a command the executor runs"},
 		{privileged.TypeTalosctl, talosctlArgs("kubeconfig", "--nodes=192.0.2.11"), "is not a command the executor runs"},
 		{privileged.TypeTalosctl, talosctlArgs("etcd", "snapshot", "db", "--nodes=192.0.2.11"), "talosctl etcd is not a command the executor runs"},
@@ -221,6 +236,30 @@ func TestSideroRequestRefusals(t *testing.T) {
 		{privileged.TypeTalosctl, talosctlArgs("logs", "--nodes=192.0.2.11"), "takes 1 to 1 words"},
 		{privileged.TypeTalosctl, talosctlArgs("get", "members\u202e", "--nodes=192.0.2.11"), "control or invisible"},
 		{privileged.TypeTalosctl, talosctlArgs("get", "members", "--nodes=192.0.2.11", "--namespace=password=hunter2hunter2"), "looks like a credential"},
+		// Only the types the executor reads, by their full names; the review's secret-bearing
+		// types among the refused.
+		{privileged.TypeOmnictl, omnictlArgs("get", "configpatches"), "configpatches is not a resource type the executor reads"},
+		{privileged.TypeOmnictl, omnictlArgs("get", "ConfigPatches.omni.sidero.dev"), "is not a resource type the executor reads"},
+		{privileged.TypeOmnictl, omnictlArgs("get", "siderolinkconfigs"), "is not a resource type the executor reads"},
+		{privileged.TypeOmnictl, omnictlArgs("get", "redactedclustermachineconfigs"), "is not a resource type the executor reads"},
+		{privileged.TypeTalosctl, talosctlArgs("get", "linkspecs", "--nodes=192.0.2.11"), "is not a resource type the executor reads"},
+		{privileged.TypeTalosctl, talosctlArgs("get", "registryconfigs", "--nodes=192.0.2.11"), "is not a resource type the executor reads"},
+		{privileged.TypeTalosctl, talosctlArgs("get", "manifests", "--nodes=192.0.2.11"), "is not a resource type the executor reads"},
+		{privileged.TypeTalosctl, talosctlArgs("get", "kubespanconfigs", "--nodes=192.0.2.11"), "is not a resource type the executor reads"},
+		{privileged.TypeTalosctl, talosctlArgs("get", "discoveryconfigs", "--nodes=192.0.2.11"), "is not a resource type the executor reads"},
+		{privileged.TypeTalosctl, talosctlArgs("get", "volumeconfigs", "--nodes=192.0.2.11"), "is not a resource type the executor reads"},
+		{privileged.TypeTalosctl, talosctlArgs("get", "extensionserviceconfigs", "--nodes=192.0.2.11"), "is not a resource type the executor reads"},
+		{privileged.TypeTalosctl, talosctlArgs("get", "siderolinkconfigs", "--nodes=192.0.2.11"), "is not a resource type the executor reads"},
+		{privileged.TypeTalosctl, talosctlArgs("get", "mc", "--nodes=192.0.2.11"), "is not a resource type the executor reads"},
+		{privileged.TypeTalosctl, talosctlArgs("get", "clusters", "--nodes=192.0.2.11"), "is not a resource type the executor reads"},
+		{privileged.TypeOmnictl, omnictlArgs("delete", "machinesets"), "takes 2 to 2 words"},
+		{privileged.TypeOmnictl, omnictlArgs("delete", "machinesets", "--selector=omni.sidero.dev/cluster=test-cluster"), "does not take --selector"},
+		{privileged.TypeTalosctl, talosctlArgs("upgrade", "--nodes=192.0.2.11", "--wait=false", "--image=docker.io/someone/installer:v1.14.5"),
+			"--image takes an installer image from factory.talos.dev or ghcr.io/siderolabs"},
+		{privileged.TypeTalosctl, talosctlArgs("upgrade", "--nodes=192.0.2.11", "--wait=false", "--image=ghcr.io/siderolabs.example.com/installer:v1"),
+			"--image takes an installer image"},
+		{privileged.TypeTalosctl, talosctlArgs("upgrade", "--nodes=192.0.2.11", "--wait=false", "--image=ghcr.io/siderolabs/../evil/installer"),
+			"--image takes an installer image"},
 	} {
 		_, err := e.svc.Request(context.Background(), mainSession, tc.typ, jsonArgs(tc.args), "r", fmt.Sprintf("r%d", i))
 		if !errors.Is(err, privileged.ErrInvalid) || !strings.Contains(err.Error(), tc.want) {
@@ -239,6 +278,8 @@ func TestSideroRequestRefusals(t *testing.T) {
 		{privileged.TypeOmnictl, map[string]any{"argv": []string{"omnictl", "apply", "--file=-"},
 			"stdin": "metadata:\n  namespace: default\n  type: JoinTokens.omni.sidero.dev\n  id: x\n"}},
 		{privileged.TypeOmnictl, map[string]any{"argv": []string{"omnictl", "apply", "--file=-"}, "stdin": "spec: {}\n"}},
+		{privileged.TypeOmnictl, map[string]any{"argv": []string{"omnictl", "apply", "--file=-"},
+			"stdin": "metadata:\n  namespace: default\n  type: ConfigPatches.omni.sidero.dev\n  id: x\n"}},
 	} {
 		if _, err := e.svc.Request(context.Background(), mainSession, tc.typ, jsonArgs(tc.args), "r", fmt.Sprintf("s%d", i)); !errors.Is(err, privileged.ErrInvalid) {
 			t.Errorf("%v: err = %v", tc.args, err)
@@ -259,10 +300,16 @@ func TestSideroPreflightRefusals(t *testing.T) {
 	}{
 		"another cluster": {privileged.TypeTalosctl, map[string]any{"target": "prod-02", "argv": []string{"talosctl", "version", "--nodes=n1"}},
 			applyPatch, `target "prod-02" is not a cluster this executor may act on`},
-		"dry run fails": {privileged.TypeOmnictl, omnictlArgs("cluster", "delete", "widgets"), func(privileged.SideroRun) privileged.CommandOutput {
+		"omnictl on another cluster": {privileged.TypeOmnictl, omnictlArgs("cluster", "status", "prod-02"), applyPatch,
+			`cluster "prod-02" is not one this executor acts on (test-cluster)`},
+		"apply to another cluster": {privileged.TypeOmnictl, omnictlApply(strings.ReplaceAll(patchYAML, "cluster: test-cluster", "cluster: prod-02")), applyPatch,
+			`(MachineSets.omni.sidero.dev test-cluster-workers) belongs to cluster "prod-02"`},
+		"apply to no cluster": {privileged.TypeOmnictl, omnictlApply("metadata:\n  namespace: default\n  type: MachineClasses.omni.sidero.dev\n  id: big\nspec: {}\n"), applyPatch,
+			"(MachineClasses.omni.sidero.dev big) belongs to no cluster"},
+		"dry run fails": {privileged.TypeOmnictl, omnictlArgs("cluster", "delete", "test-cluster"), func(privileged.SideroRun) privileged.CommandOutput {
 			return privileged.CommandOutput{ExitCode: 1, Stderr: []byte("rpc error: code = NotFound desc = cluster widgets has secret things")}
 		}, "the dry run of omnictl cluster delete failed (exit 1, NotFound); the executor's log has its message"},
-		"dry run refused by the proxy": {privileged.TypeOmnictl, omnictlArgs("cluster", "delete", "widgets"), func(privileged.SideroRun) privileged.CommandOutput {
+		"dry run refused by the proxy": {privileged.TypeOmnictl, omnictlArgs("cluster", "delete", "test-cluster"), func(privileged.SideroRun) privileged.CommandOutput {
 			return privileged.CommandOutput{ExitCode: 1, Stderr: []byte("rpc error: code = PermissionDenied desc = refused by the executor: /cosi.resource.State/Destroy writes")}
 		}, "refused by the executor's proxy"},
 	} {
