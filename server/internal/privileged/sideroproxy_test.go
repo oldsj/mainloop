@@ -98,7 +98,8 @@ type omniWorld struct {
 	noDefinition  []string
 }
 
-// testWorld has clusters internal-01 (machine m-1, node-a, 192.0.2.11) and prod-02 (m-2,
+// testWorld has clusters internal-01 (machine m-1, node-a, 192.0.2.11, on Talos 1.14.2 with
+// schematic ab…; and m-3, node-b, 192.0.2.12, whose schematic Omni cannot tell) and prod-02 (m-2,
 // node-z, 192.0.2.99), a machine set and a cluster resource of each, and a machine class of
 // neither.
 func testWorld() *omniWorld {
@@ -110,10 +111,31 @@ func testWorld() *omniWorld {
 		return cosiResource{ns: "default", typ: omniClusterMachineIDs, id: id, labels: map[string]string{omniClusterLabel: cluster}, protoSpec: spec}
 	}
 	in := func(cluster string) map[string]string { return map[string]string{omniClusterLabel: cluster} }
+	// MachineStatusSpec: talos_version (1), schematic (14) with invalid (2) and full_id (9), and
+	// kernel_cmdline (22), which the proxy never passes on.
+	status := func(id, cluster, version, schematic string, invalid bool) cosiResource {
+		sch := protowire.AppendTag(nil, 9, protowire.BytesType)
+		sch = protowire.AppendString(sch, schematic)
+		if invalid {
+			sch = protowire.AppendTag(sch, 2, protowire.VarintType)
+			sch = protowire.AppendVarint(sch, 1)
+		}
+		spec := protowire.AppendTag(nil, 1, protowire.BytesType)
+		spec = protowire.AppendString(spec, version)
+		spec = protowire.AppendTag(spec, 14, protowire.BytesType)
+		spec = protowire.AppendBytes(spec, sch)
+		spec = protowire.AppendTag(spec, 22, protowire.BytesType)
+		spec = protowire.AppendString(spec, "siderolink.api=https://omni.example.com?jointoken=fictional")
+		return cosiResource{ns: "default", typ: omniMachineStatuses, id: id, labels: in(cluster), protoSpec: spec}
+	}
 	return &omniWorld{
 		resources: []cosiResource{
 			machine("m-1", "internal-01", "node-a", "192.0.2.11"),
 			machine("m-2", "prod-02", "node-z", "192.0.2.99"),
+			machine("m-3", "internal-01", "node-b", "192.0.2.12"),
+			status("m-1", "internal-01", "1.14.2", strings.Repeat("ab", 32), false),
+			status("m-2", "prod-02", "1.14.2", strings.Repeat("ab", 32), false),
+			status("m-3", "internal-01", "1.14.2", "", true),
 			{ns: "default", typ: "Clusters.omni.sidero.dev", id: "internal-01", labels: map[string]string{}},
 			{ns: "default", typ: "Clusters.omni.sidero.dev", id: "prod-02", labels: map[string]string{}},
 			{ns: "default", typ: "MachineSets.omni.sidero.dev", id: "internal-01-workers", labels: in("internal-01")},
@@ -508,6 +530,16 @@ func TestSideroProxyRefusals(t *testing.T) {
 		"install any image":      {ToolTalosctl, false, methodLifecycleUpgrade, lifecycleUpgrade("docker.io/someone/installer:v1"), talos},
 		"install with no source": {ToolTalosctl, false, methodLifecycleUpgrade, []byte{}, talos},
 		"pull in preflight":      {ToolTalosctl, true, methodImagePull, imagePull("ghcr.io/siderolabs/installer:v1.14.5"), talos},
+		// An upgrade holds to the machine's own schematic (ab…) and to Talos 1.14.2 or later.
+		"install another schematic":       {ToolTalosctl, false, methodLifecycleUpgrade, lifecycleUpgrade(factoryImage("cd", "v1.14.5")), talos},
+		"pull a downgrade":                {ToolTalosctl, false, methodImagePull, imagePull(factoryImage("ab", "v1.14.1")), talos},
+		"legacy downgrade":                {ToolTalosctl, false, methodUpgrade, cosiRequest(factoryImage("ab", "v1.13.9"), ""), talos},
+		"the vanilla installer":           {ToolTalosctl, false, methodUpgrade, cosiRequest("ghcr.io/siderolabs/installer:v1.14.5", ""), talos},
+		"an image with no version":        {ToolTalosctl, false, methodImagePull, imagePull("factory.talos.dev/metal-installer/" + strings.Repeat("ab", 32)), talos},
+		"a version that is not semver":    {ToolTalosctl, false, methodImagePull, imagePull(factoryImage("ab", "latest")), talos},
+		"legacy upgrade with no image":    {ToolTalosctl, false, methodUpgrade, []byte{}, talos},
+		"a machine with no schematic":     {ToolTalosctl, false, methodImagePull, imagePull(factoryImage("ab", "v1.14.5")), []string{"nodes", "192.0.2.12", "context", "internal-01"}},
+		"one good node and one not":       {ToolTalosctl, false, methodImagePull, imagePull(factoryImage("ab", "v1.14.5")), []string{"nodes", "192.0.2.11,node-b", "context", "internal-01"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			omni, _, conn := newProxyFixture(t, tc.tool, "internal-01", tc.preflight)
@@ -588,12 +620,26 @@ func TestSideroProxyTalosNodes(t *testing.T) {
 	if lists != 1 {
 		t.Errorf("the machines were listed %d times, want once per run", lists)
 	}
-	// Talos 1.13 and later: talosctl pulls the image, installs it, then reboots.
-	for method, body := range map[string][]byte{methodImagePull: imagePull(image), methodLifecycleUpgrade: lifecycleUpgrade(image)} {
+	// Talos 1.13 and later: talosctl pulls the image, installs it, then reboots. The same version
+	// (a reinstall), a pre-release of a later one, and a secure-boot installer of the same
+	// schematic are upgrades too.
+	for method, body := range map[string][]byte{
+		methodImagePull:        imagePull(image),
+		methodLifecycleUpgrade: lifecycleUpgrade(image),
+		methodUpgrade:          cosiRequest(factoryImage("ab", "v1.14.2"), ""),
+		methodImagePull + "#2": imagePull(factoryImage("ab", "v1.15.0-alpha.1")),
+		methodImagePull + "#3": imagePull("factory.talos.dev/metal-installer-secureboot/" + strings.Repeat("ab", 32) + ":v1.14.5"),
+	} {
+		method, _, _ = strings.Cut(method, "#")
 		if err := call(ctx, conn, method, body, "node", "node-a", "context", "internal-01"); err != nil || !omni.forwarded(method, body) {
 			t.Fatalf("%s: %v", method, err)
 		}
 	}
+}
+
+// factoryImage is an Image Factory installer for the schematic of 32 repeats of hex.
+func factoryImage(hex, version string) string {
+	return "factory.talos.dev/metal-installer/" + strings.Repeat(hex, 32) + ":" + version
 }
 
 // imagePull encodes an ImageServicePullRequest: containerd (1), image_ref (3).

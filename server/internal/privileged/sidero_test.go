@@ -260,11 +260,15 @@ func TestSideroRequestRefusals(t *testing.T) {
 		{privileged.TypeOmnictl, omnictlArgs("delete", "machinesets"), "takes 2 to 2 words"},
 		{privileged.TypeOmnictl, omnictlArgs("delete", "machinesets", "--selector=omni.sidero.dev/cluster=test-cluster"), "does not take --selector"},
 		{privileged.TypeTalosctl, talosctlArgs("upgrade", "--nodes=192.0.2.11", "--wait=false", "--image=docker.io/someone/installer:v1.14.5"),
-			"--image takes an installer image from factory.talos.dev or ghcr.io/siderolabs"},
+			"--image takes an installer image with its version"},
 		{privileged.TypeTalosctl, talosctlArgs("upgrade", "--nodes=192.0.2.11", "--wait=false", "--image=ghcr.io/siderolabs.example.com/installer:v1"),
 			"--image takes an installer image"},
 		{privileged.TypeTalosctl, talosctlArgs("upgrade", "--nodes=192.0.2.11", "--wait=false", "--image=ghcr.io/siderolabs/../evil/installer"),
 			"--image takes an installer image"},
+		{privileged.TypeTalosctl, talosctlArgs("upgrade", "--nodes=192.0.2.11", "--wait=false", "--image=factory.talos.dev/metal-installer/" + strings.Repeat("ab", 32)),
+			"--image takes an installer image with its version"},
+		{privileged.TypeTalosctl, talosctlArgs("upgrade", "--nodes=192.0.2.11", "--wait=false", "--image=ghcr.io/siderolabs/talosctl:v1.14.5"),
+			"--image takes an installer image with its version"},
 	} {
 		_, err := e.svc.Request(context.Background(), mainSession, tc.typ, jsonArgs(tc.args), "r", fmt.Sprintf("r%d", i))
 		if !errors.Is(err, privileged.ErrInvalid) || !strings.Contains(err.Error(), tc.want) {

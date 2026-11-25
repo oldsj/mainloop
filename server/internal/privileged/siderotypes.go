@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"golang.org/x/mod/semver"
 )
 
 // The COSI resource types omnictl and talosctl may name: an allowlist, so a type a release adds,
@@ -138,8 +140,29 @@ func omniClusterOf(typ, id string, labels map[string]string) (cluster string, ok
 	return "", false
 }
 
-// talosImageRE is an installer image from Sidero's registries: the Image Factory or ghcr.io's
-// siderolabs organisation. talosctl upgrade installs it as the node's operating system.
-var talosImageRE = regexp.MustCompile(`^(factory\.talos\.dev|ghcr\.io/siderolabs)/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*(:[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?(@sha256:[0-9a-f]{64})?$`)
+// installerImageRE is a Talos installer image with its version tag: the Image Factory's for a
+// schematic (factory.talos.dev/<platform>-installer[-secureboot]/<schematic ID>:v1.x.y), or
+// ghcr.io/siderolabs/installer, the schematic with no customization. talosctl upgrade installs it
+// as the node's operating system.
+var installerImageRE = regexp.MustCompile(`^(?:factory\.talos\.dev/(?:[a-z0-9]+-)*installer(?:-secureboot)?/([0-9a-f]{64})|ghcr\.io/siderolabs/installer):(v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)(?:@sha256:[0-9a-f]{64})?$`)
 
-func talosImage(s string) bool { return talosImageRE.MatchString(s) && !strings.Contains(s, "..") }
+// vanillaSchematic is the Image Factory's ID for the schematic with no customization, which
+// ghcr.io/siderolabs/installer installs.
+const vanillaSchematic = "376567988ad370138ad8b2698212367b8edcb69b5fd68c80be1f2ec7d603b4ba"
+
+const installerImageHint = "an installer image with its version: factory.talos.dev/<platform>-installer/<schematic ID>:v1.x.y, " +
+	"or ghcr.io/siderolabs/installer:v1.x.y"
+
+// installerImage reads an installer image's schematic and Talos version.
+func installerImage(s string) (schematic, version string, ok bool) {
+	m := installerImageRE.FindStringSubmatch(s)
+	if m == nil || !semver.IsValid(m[2]) {
+		return "", "", false
+	}
+	if m[1] == "" {
+		return vanillaSchematic, m[2], true
+	}
+	return m[1], m[2], true
+}
+
+func talosImage(s string) bool { _, _, ok := installerImage(s); return ok }

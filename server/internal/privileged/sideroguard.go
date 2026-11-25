@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/siderolabs/go-api-signature/pkg/message"
+	"golang.org/x/mod/semver"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	grpcstatus "google.golang.org/grpc/status"
@@ -24,6 +25,9 @@ import (
 const (
 	cosiResourceDefinitions = "ResourceDefinitions.meta.cosi.dev"
 	omniClusterMachineIDs   = "ClusterMachineIdentities.omni.sidero.dev"
+	// The proxy reads a machine's status itself, for its schematic and Talos version only; the
+	// type is not readable through it (it holds the kernel command line).
+	omniMachineStatuses = "MachineStatuses.omni.sidero.dev"
 	omniDefaultNamespace    = "default"
 	methodUpgrade           = "/machine.MachineService/Upgrade"
 	// talosctl upgrade on Talos 1.13 and later pulls the image, then installs it, then reboots.
@@ -53,12 +57,78 @@ func (p *sideroProxy) check(ctx context.Context, method string, md metadata.MD, 
 		if err != nil {
 			return refusedBy("%s: %v", method, err)
 		}
-		// The legacy Upgrade with no image installs the node's own default; the others need one.
-		if (len(image) > 0 || method != methodUpgrade) && !talosImage(string(image)) {
-			return refusedBy("the upgrade image is not from factory.talos.dev or ghcr.io/siderolabs")
+		return p.checkUpgradeImage(ctx, md, string(image))
+	}
+	return nil
+}
+
+// checkUpgradeImage holds an upgrade to each node's own schematic, as Omni records it, and to a
+// Talos version no older than the one it runs: no other extensions or kernel arguments, and no
+// silent downgrade (talosctl rollback is the way back).
+func (p *sideroProxy) checkUpgradeImage(ctx context.Context, md metadata.MD, image string) error {
+	schematic, version, ok := installerImage(image)
+	if !ok {
+		return refusedBy("the upgrade image is not %s", installerImageHint)
+	}
+	m, err := p.machines(ctx)
+	if err != nil {
+		return err
+	}
+	for _, node := range requestNodes(md) {
+		id, ok := m.machineID(node)
+		if !ok {
+			return refusedBy("node %q is not a machine of cluster %s in Omni", node, p.cluster)
+		}
+		st, err := p.machineStatus(ctx, id)
+		if err != nil {
+			return err
+		}
+		switch {
+		case st.invalid || st.schematic == "":
+			return refusedBy("Omni records no Image Factory schematic for machine %s, so no upgrade image can be held to it", id)
+		case schematic != st.schematic:
+			return refusedBy("the image's schematic %s is not machine %s's (%s in Omni)", schematic, id, st.schematic)
+		case !semver.IsValid(st.version):
+			return refusedBy("Omni records no Talos version for machine %s", id)
+		case semver.Compare(version, st.version) < 0:
+			return refusedBy("the image's Talos %s is older than machine %s's %s: no downgrades (talosctl rollback goes back)", version, id, st.version)
 		}
 	}
 	return nil
+}
+
+// machineState is what the proxy reads of a machine's status in Omni.
+type machineState struct {
+	schematic, version string
+	invalid            bool
+}
+
+// machineStatus reads MachineStatusSpec: talos_version (1), and schematic (14) with invalid (2)
+// and full_id (9). Nothing else of it is kept.
+func (p *sideroProxy) machineStatus(ctx context.Context, id string) (machineState, error) {
+	var st machineState
+	r, err := p.get(ctx, metadata.MD{}, omniDefaultNamespace, omniMachineStatuses, id)
+	if err != nil || r.protoSpec == nil {
+		return st, refusedBy("machine %s's status cannot be read from Omni", id)
+	}
+	version, err1 := protoField(r.protoSpec, 1)
+	schematic, err2 := protoField(r.protoSpec, 14)
+	if err := errors.Join(err1, err2); err != nil {
+		return st, refusedBy("machine %s's status cannot be read from Omni", id)
+	}
+	st.version = string(version)
+	if st.version != "" && !strings.HasPrefix(st.version, "v") {
+		st.version = "v" + st.version
+	}
+	if schematic != nil {
+		invalid, _, err1 := protoVarint(schematic, 2)
+		full, err2 := protoField(schematic, 9)
+		if err := errors.Join(err1, err2); err != nil {
+			return st, refusedBy("machine %s's status cannot be read from Omni", id)
+		}
+		st.invalid, st.schematic = invalid != 0, string(full)
+	}
+	return st, nil
 }
 
 // upgradeImage is the image an upgrade call installs: machine.UpgradeRequest.image (1),
@@ -170,15 +240,21 @@ func definitionSensitive(r cosiResource) (bool, error) {
 // and addresses.
 type clusterMachines struct {
 	ids   map[string]bool
-	names map[string]bool
-	addrs map[netip.Addr]bool
+	names map[string]string
+	addrs map[netip.Addr]string
 }
 
-func (m clusterMachines) has(node string) bool {
+// machineID is the ID of the machine a node names, by address, node name or ID.
+func (m clusterMachines) machineID(node string) (string, bool) {
 	if a, err := netip.ParseAddr(strings.Trim(node, "[]")); err == nil {
-		return m.addrs[a.Unmap()]
+		id, ok := m.addrs[a.Unmap()]
+		return id, ok
 	}
-	return m.ids[node] || m.names[strings.ToLower(node)]
+	if m.ids[node] {
+		return node, true
+	}
+	id, ok := m.names[strings.ToLower(node)]
+	return id, ok
 }
 
 // machines lists Omni's ClusterMachineIdentities for the proxy's clusters, once per run.
@@ -188,7 +264,7 @@ func (p *sideroProxy) machines(ctx context.Context) (clusterMachines, error) {
 	if p.clusterMachines != nil {
 		return *p.clusterMachines, nil
 	}
-	m := clusterMachines{ids: map[string]bool{}, names: map[string]bool{}, addrs: map[netip.Addr]bool{}}
+	m := clusterMachines{ids: map[string]bool{}, names: map[string]string{}, addrs: map[netip.Addr]string{}}
 	err := p.upstreamCall(ctx, cosiState+"List", metadata.MD{}, cosiList(omniDefaultNamespace, omniClusterMachineIDs), func(msg []byte) error {
 		b, err := protoField(msg, 1)
 		if err != nil || b == nil {
@@ -203,11 +279,11 @@ func (p *sideroProxy) machines(ctx context.Context) (clusterMachines, error) {
 		}
 		m.ids[r.id] = true
 		if name, err := protoField(r.protoSpec, 3); err == nil && len(name) > 0 { // nodename
-			m.names[strings.ToLower(string(name))] = true
+			m.names[strings.ToLower(string(name))] = r.id
 		}
 		return protoEach(r.protoSpec, 8, func(ip []byte) error { // node_ips
 			if a, err := netip.ParseAddr(string(ip)); err == nil {
-				m.addrs[a.Unmap()] = true
+				m.addrs[a.Unmap()] = r.id
 			}
 			return nil
 		})
@@ -222,12 +298,7 @@ func (p *sideroProxy) machines(ctx context.Context) (clusterMachines, error) {
 // checkNodes refuses a talosctl request for a node that is not a machine of its cluster: Omni
 // routes a node given by address, so the context header alone does not hold it to the cluster.
 func (p *sideroProxy) checkNodes(ctx context.Context, md metadata.MD) error {
-	var nodes []string
-	for _, k := range []string{message.NodesHeaderKey, "node"} {
-		for _, v := range md.Get(k) {
-			nodes = append(nodes, strings.Split(v, ",")...)
-		}
-	}
+	nodes := requestNodes(md)
 	if len(nodes) == 0 {
 		return refusedBy("the request names no node")
 	}
@@ -236,11 +307,24 @@ func (p *sideroProxy) checkNodes(ctx context.Context, md metadata.MD) error {
 		return err
 	}
 	for _, n := range nodes {
-		if !m.has(strings.TrimSpace(n)) {
+		if _, ok := m.machineID(n); !ok {
 			return refusedBy("node %q is not a machine of cluster %s in Omni", n, p.cluster)
 		}
 	}
 	return nil
+}
+
+// requestNodes are the nodes a talosctl request names, in its nodes and node headers.
+func requestNodes(md metadata.MD) []string {
+	var nodes []string
+	for _, k := range []string{message.NodesHeaderKey, "node"} {
+		for _, v := range md.Get(k) {
+			for n := range strings.SplitSeq(v, ",") {
+				nodes = append(nodes, strings.TrimSpace(n))
+			}
+		}
+	}
+	return nodes
 }
 
 // checkOmniWrite holds an omnictl write to the clusters the executor acts on: the resource it

@@ -129,7 +129,7 @@ func resetFlags() map[string]sideroFlag {
 
 func upgradeFlags() map[string]sideroFlag {
 	return map[string]sideroFlag{
-		"wait": noWait, "image": {value: true, check: talosImage, hint: "an installer image from factory.talos.dev or ghcr.io/siderolabs"},
+		"wait": noWait, "image": {value: true, check: talosImage, hint: installerImageHint},
 		"stage": switchFlag, "force": switchFlag, "preserve": switchFlag,
 		"reboot-mode": {value: true, values: []string{"default", "powercycle"}},
 	}
