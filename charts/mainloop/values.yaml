@@ -47,6 +47,7 @@ config:
   # Accepts the executor types (onepassword.*). The chart sets it true with executor.enabled.
   MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED: 'false'
   MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED: 'false'
+  MAINLOOP_PRIVILEGED_EXECUTOR_OMNI_ENABLED: 'false'
   # Owner API authentication (docs/specs/authentication.md): observe verifies and logs what enforce
   # would refuse, and refuses nothing. serve-api will not start outside development without a mode.
   # A deployment sets enforce once it has MAINLOOP_AUTH_OIDC_* and its machine callers carry tokens.
@@ -308,6 +309,20 @@ executor:
     enabled: false
     # Shown on the cards, e.g. internal-01.
     clusterName: ''
+  # command.omnictl and command.talosctl. On, the executor runs omnictl and talosctl through a
+  # re-signing proxy of its own: the tools get a key made for the run, and the executor signs what
+  # it forwards with an Omni service account (role Admin) from keySecret. Its pod needs egress to
+  # endpoint on 443.
+  omni:
+    enabled: false
+    # Omni's URL, e.g. https://omni.example.com.
+    endpoint: ''
+    # The Omni clusters talosctl may target.
+    clusters: []
+    # Key service-account-key: the Omni service account's key, as omnictl serviceaccount create
+    # prints it.
+    # trunk-ignore(checkov/CKV_SECRET_6): the Secret's name, not a value
+    keySecret: mainloop-executor-omni
   nodeSelector: {}
   affinity: {}
   tolerations: []

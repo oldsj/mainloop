@@ -22,13 +22,13 @@ const executorToken = "tok-fictional-executor-7f3a9c2e"
 // fakeKubectl answers kubectl runs from handle; runs keeps every run, dry runs included.
 type fakeKubectl struct {
 	runs   []privileged.KubectlRun
-	handle func(run privileged.KubectlRun, dry bool) privileged.KubectlOutput
+	handle func(run privileged.KubectlRun, dry bool) privileged.CommandOutput
 }
 
-func (f *fakeKubectl) Run(_ context.Context, run privileged.KubectlRun) (privileged.KubectlOutput, error) {
+func (f *fakeKubectl) Run(_ context.Context, run privileged.KubectlRun) (privileged.CommandOutput, error) {
 	f.runs = append(f.runs, run)
 	if run.Preflight != slices.Contains(run.Args, "--dry-run=server") {
-		return privileged.KubectlOutput{}, fmt.Errorf("preflight %v but args %v: the proxy must know a dry run", run.Preflight, run.Args)
+		return privileged.CommandOutput{}, fmt.Errorf("preflight %v but args %v: the proxy must know a dry run", run.Preflight, run.Args)
 	}
 	out := f.handle(run, run.Preflight)
 	out.Credentials = []string{executorToken}
@@ -46,19 +46,19 @@ func (f *fakeKubectl) real() int {
 	return n
 }
 
-func newKubectlEnv(t *testing.T, handle func(m *memKube, run privileged.KubectlRun, dry bool) privileged.KubectlOutput) (*kubeEnv, *memKube, *fakeKubectl) {
+func newKubectlEnv(t *testing.T, handle func(m *memKube, run privileged.KubectlRun, dry bool) privileged.CommandOutput) (*kubeEnv, *memKube, *fakeKubectl) {
 	t.Helper()
 	e := newKubeEnv(t)
 	m := newMemKube(e)
 	m.put(memResources["configmap"], configMap(appNS, "settings", map[string]any{"mode": "slow"}))
-	k := &fakeKubectl{handle: func(run privileged.KubectlRun, dry bool) privileged.KubectlOutput { return handle(m, run, dry) }}
+	k := &fakeKubectl{handle: func(run privileged.KubectlRun, dry bool) privileged.CommandOutput { return handle(m, run, dry) }}
 	e.ex.Kubectl = k
 	return e, m, k
 }
 
 // labelSettings is `kubectl label configmap settings tier=gold`: a dry run prints the object with
 // -o json; the real run stores it.
-func labelSettings(m *memKube, _ privileged.KubectlRun, dry bool) privileged.KubectlOutput {
+func labelSettings(m *memKube, _ privileged.KubectlRun, dry bool) privileged.CommandOutput {
 	o := clone(m.objects[m.key(memResources["configmap"], appNS, "settings")])
 	u := &unstructured.Unstructured{Object: o}
 	labels := u.GetLabels()
@@ -66,19 +66,19 @@ func labelSettings(m *memKube, _ privileged.KubectlRun, dry bool) privileged.Kub
 	u.SetLabels(labels)
 	if dry {
 		b, _ := json.Marshal(o)
-		return privileged.KubectlOutput{Stdout: b}
+		return privileged.CommandOutput{Stdout: b}
 	}
 	m.put(memResources["configmap"], o)
-	return privileged.KubectlOutput{Stdout: []byte("configmap/settings labeled\nAuthorization: Bearer " + executorToken + "\n")}
+	return privileged.CommandOutput{Stdout: []byte("configmap/settings labeled\nAuthorization: Bearer " + executorToken + "\n")}
 }
 
 func kubectlArgs(argv ...string) map[string]any {
 	return map[string]any{"target": cluster, "argv": append([]string{"kubectl"}, argv...)}
 }
 
-func kubectlResult(t *testing.T, a privileged.Action) privileged.KubectlResult {
+func kubectlResult(t *testing.T, a privileged.Action) privileged.CommandResult {
 	t.Helper()
-	var res privileged.KubectlResult
+	var res privileged.CommandResult
 	if err := json.Unmarshal(a.Result, &res); err != nil {
 		t.Fatal(err)
 	}
@@ -161,26 +161,26 @@ func TestKubectlNeverRunsTwice(t *testing.T) {
 // said; a command past its deadline is uncertain.
 func TestKubectlOutcomes(t *testing.T) {
 	for name, tc := range map[string]struct {
-		out   privileged.KubectlOutput
+		out   privileged.CommandOutput
 		state string
-		check func(t *testing.T, res privileged.KubectlResult)
+		check func(t *testing.T, res privileged.CommandResult)
 	}{
-		"read": {privileged.KubectlOutput{Stdout: []byte("NAME    READY\napi-1   1/1\nseen " + executorToken + " and " + base64.StdEncoding.EncodeToString([]byte(executorToken)) + "\n")}, privileged.StateSucceeded,
-			func(t *testing.T, res privileged.KubectlResult) {
+		"read": {privileged.CommandOutput{Stdout: []byte("NAME    READY\napi-1   1/1\nseen " + executorToken + " and " + base64.StdEncoding.EncodeToString([]byte(executorToken)) + "\n")}, privileged.StateSucceeded,
+			func(t *testing.T, res privileged.CommandResult) {
 				if !strings.Contains(res.Stdout, "api-1   1/1") || !strings.Contains(res.Stdout, "seen [redacted] and [redacted]") {
 					t.Errorf("result = %+v", res)
 				}
 			}},
-		"exit 1": {privileged.KubectlOutput{ExitCode: 1, Stderr: []byte(`Error from server (NotFound): pods "api-9" not found`)}, privileged.StateFailed,
-			func(t *testing.T, res privileged.KubectlResult) {
+		"exit 1": {privileged.CommandOutput{ExitCode: 1, Stderr: []byte(`Error from server (NotFound): pods "api-9" not found`)}, privileged.StateFailed,
+			func(t *testing.T, res privileged.CommandResult) {
 				if res.ExitCode != 1 || !strings.Contains(res.Stderr, "NotFound") {
 					t.Errorf("result = %+v", res)
 				}
 			}},
-		"timeout": {privileged.KubectlOutput{TimedOut: true, Stdout: []byte("partial")}, privileged.StateUncertain, nil},
+		"timeout": {privileged.CommandOutput{TimedOut: true, Stdout: []byte("partial")}, privileged.StateUncertain, nil},
 	} {
 		t.Run(name, func(t *testing.T) {
-			e, _, k := newKubectlEnv(t, func(*memKube, privileged.KubectlRun, bool) privileged.KubectlOutput { return tc.out })
+			e, _, k := newKubectlEnv(t, func(*memKube, privileged.KubectlRun, bool) privileged.CommandOutput { return tc.out })
 			args := kubectlArgs("get", "pods", "-n", appNS)
 			args["timeout_seconds"] = 30
 			a := e.request(t, privileged.TypeKubectl, "kubectl-1", args)
@@ -206,11 +206,11 @@ func TestKubectlOutcomes(t *testing.T) {
 
 // A delete is previewed by the server dry run's text, is tagged destructive and expires in an hour.
 func TestKubectlDeleteShowsTheDryRunText(t *testing.T) {
-	e, _, k := newKubectlEnv(t, func(_ *memKube, _ privileged.KubectlRun, dry bool) privileged.KubectlOutput {
+	e, _, k := newKubectlEnv(t, func(_ *memKube, _ privileged.KubectlRun, dry bool) privileged.CommandOutput {
 		if dry {
-			return privileged.KubectlOutput{Stdout: []byte(`pod "api-1" deleted (server dry run)`)}
+			return privileged.CommandOutput{Stdout: []byte(`pod "api-1" deleted (server dry run)`)}
 		}
-		return privileged.KubectlOutput{Stdout: []byte(`pod "api-1" deleted`)}
+		return privileged.CommandOutput{Stdout: []byte(`pod "api-1" deleted`)}
 	})
 	a := e.request(t, privileged.TypeKubectl, "kubectl-1", kubectlArgs("delete", "pod", "api-1", "-n", appNS))
 	if d := a.ExpiresAt.Sub(a.CreatedAt); d > time.Hour+time.Minute {
@@ -301,15 +301,15 @@ func TestKubectlRequestRefusals(t *testing.T) {
 // Commands that reach the executor's own namespace, change a Secret, or target another cluster are
 // refused at preflight, and nothing runs but the dry run.
 func TestKubectlPreflightRefusals(t *testing.T) {
-	secret := func(_ *memKube, _ privileged.KubectlRun, _ bool) privileged.KubectlOutput {
-		return privileged.KubectlOutput{Stdout: []byte(`{"apiVersion":"v1","kind":"Secret","metadata":{"name":"db","namespace":"widgets"},"data":{"a":"Yg=="}}`)}
+	secret := func(_ *memKube, _ privileged.KubectlRun, _ bool) privileged.CommandOutput {
+		return privileged.CommandOutput{Stdout: []byte(`{"apiVersion":"v1","kind":"Secret","metadata":{"name":"db","namespace":"widgets"},"data":{"a":"Yg=="}}`)}
 	}
-	ownText := func(_ *memKube, _ privileged.KubectlRun, _ bool) privileged.KubectlOutput {
-		return privileged.KubectlOutput{Stdout: []byte(`clusterrolebinding.rbac.authorization.k8s.io "` + executorNS + `-admin" deleted (server dry run)`)}
+	ownText := func(_ *memKube, _ privileged.KubectlRun, _ bool) privileged.CommandOutput {
+		return privileged.CommandOutput{Stdout: []byte(`clusterrolebinding.rbac.authorization.k8s.io "` + executorNS + `-admin" deleted (server dry run)`)}
 	}
 	for name, tc := range map[string]struct {
 		args   map[string]any
-		handle func(*memKube, privileged.KubectlRun, bool) privileged.KubectlOutput
+		handle func(*memKube, privileged.KubectlRun, bool) privileged.CommandOutput
 		want   string
 	}{
 		"own namespace": {kubectlArgs("get", "pods", "-n", executorNS), labelSettings, "the executor's own namespace"},
@@ -318,8 +318,8 @@ func TestKubectlPreflightRefusals(t *testing.T) {
 		"dry run reaches own": {kubectlArgs("delete", "clusterrolebindings", "-l", "app=x"), ownText, "the executor's own"},
 		"changes a Secret":    {kubectlArgs("label", "secret", "db", "-n", appNS, "a=b"), secret, "change a Secret are refused"},
 		"another cluster":     {map[string]any{"target": "prod-02", "argv": []string{"kubectl", "get", "pods"}}, labelSettings, "not this executor's cluster"},
-		"dry run fails": {kubectlArgs("scale", "deploy/api", "--replicas=2", "-n", appNS), func(*memKube, privileged.KubectlRun, bool) privileged.KubectlOutput {
-			return privileged.KubectlOutput{ExitCode: 1, Stderr: []byte(`Error from server (NotFound): deployments.apps "api" not found`)}
+		"dry run fails": {kubectlArgs("scale", "deploy/api", "--replicas=2", "-n", appNS), func(*memKube, privileged.KubectlRun, bool) privileged.CommandOutput {
+			return privileged.CommandOutput{ExitCode: 1, Stderr: []byte(`Error from server (NotFound): deployments.apps "api" not found`)}
 		}, "the server dry run of kubectl scale failed (exit 1, NotFound); the executor's log has kubectl's message"},
 	} {
 		t.Run(name, func(t *testing.T) {

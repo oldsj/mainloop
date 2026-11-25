@@ -822,6 +822,9 @@ func AgentFacts(typ string, facts json.RawMessage) json.RawMessage {
 	if typ == TypeKubectl && len(facts) > 0 {
 		return kubectlAgentFacts(facts)
 	}
+	if (typ == TypeOmnictl || typ == TypeTalosctl) && len(facts) > 0 {
+		return sideroAgentFacts(facts)
+	}
 	if typ == TypeArgoSync && len(facts) > 0 {
 		var f ArgoFacts
 		if err := json.Unmarshal(facts, &f); err != nil {

@@ -34,22 +34,22 @@ type ExecKubectl struct {
 	Dir string
 }
 
-func (k ExecKubectl) Run(ctx context.Context, run KubectlRun) (KubectlOutput, error) {
+func (k ExecKubectl) Run(ctx context.Context, run KubectlRun) (CommandOutput, error) {
 	// The token outlives the run, by its deadline and a margin, so it cannot expire mid-command.
 	cfg, err := k.Clients.ConfigFor(ctx, AccountAdmin, run.Timeout+2*time.Minute)
 	if err != nil {
-		return KubectlOutput{}, err
+		return CommandOutput{}, err
 	}
 	creds := []string{cfg.BearerToken}
 	proxy, err := newKubeProxy(cfg, k.Clients.Namespace, run.Preflight)
 	if err != nil {
-		return KubectlOutput{Credentials: creds}, err
+		return CommandOutput{Credentials: creds}, err
 	}
 	creds = append(creds, proxy.runToken)
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
-		return KubectlOutput{Credentials: creds}, fmt.Errorf("kubectl proxy: %w", err)
+		return CommandOutput{Credentials: creds}, fmt.Errorf("kubectl proxy: %w", err)
 	}
 	srv := &http.Server{Handler: proxy, ReadHeaderTimeout: 30 * time.Second, ErrorLog: log.New(io.Discard, "", 0)}
 	go func() { _ = srv.Serve(tls.NewListener(ln, proxy.tls)) }()
@@ -57,7 +57,7 @@ func (k ExecKubectl) Run(ctx context.Context, run KubectlRun) (KubectlOutput, er
 
 	dir, err := os.MkdirTemp(k.Dir, "kubectl-")
 	if err != nil {
-		return KubectlOutput{Credentials: creds}, err
+		return CommandOutput{Credentials: creds}, err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	kc := clientcmdapi.NewConfig()
@@ -67,30 +67,39 @@ func (k ExecKubectl) Run(ctx context.Context, run KubectlRun) (KubectlOutput, er
 	kc.CurrentContext = "target"
 	path := filepath.Join(dir, "config")
 	if err := clientcmd.WriteToFile(*kc, path); err != nil {
-		return KubectlOutput{Credentials: creds}, err
+		return CommandOutput{Credentials: creds}, err
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
-		return KubectlOutput{Credentials: creds}, err
+		return CommandOutput{Credentials: creds}, err
 	}
 
-	rctx, cancel := context.WithTimeout(ctx, run.Timeout)
-	defer cancel()
 	bin := k.Binary
 	if bin == "" {
 		bin = "kubectl"
 	}
-	cmd := exec.CommandContext(rctx, bin, run.Args...) //nolint:gosec // the owner-approved argv, run without a shell; parseKubectl refused what must not run
-	cmd.Dir = dir
 	// Only what kubectl needs: no proxy, no plugin path, no kuberc from a home it does not have.
-	cmd.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + dir, "KUBECONFIG=" + path, "KUBERC=off", "KUBECTL_NO_PLUGINS=true"}
+	env := []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=" + dir, "KUBECONFIG=" + path, "KUBERC=off", "KUBECTL_NO_PLUGINS=true"}
+	out, err := runBinary(ctx, bin, run.Args, env, dir, run.Stdin, run.Timeout)
+	out.Credentials = creds
+	return out, err
+}
+
+// runBinary runs an owner-approved argv without a shell, in dir, with only env, under timeout, and
+// keeps a bounded copy of what it prints.
+func runBinary(ctx context.Context, bin string, args, env []string, dir, stdin string, timeout time.Duration) (CommandOutput, error) {
+	rctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := exec.CommandContext(rctx, bin, args...) //nolint:gosec // the owner-approved argv, run without a shell; its parser refused what must not run
+	cmd.Dir = dir
+	cmd.Env = env
 	cmd.WaitDelay = 5 * time.Second
-	if run.Stdin != "" {
-		cmd.Stdin = bytes.NewReader([]byte(run.Stdin))
+	if stdin != "" {
+		cmd.Stdin = bytes.NewReader([]byte(stdin))
 	}
 	var stdout, stderr capped
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err = cmd.Run()
-	out := KubectlOutput{Stdout: stdout.Bytes(), Stderr: stderr.Bytes(), Credentials: creds}
+	err := cmd.Run()
+	out := CommandOutput{Stdout: stdout.Bytes(), Stderr: stderr.Bytes()}
 	var exit *exec.ExitError
 	switch {
 	case rctx.Err() != nil && ctx.Err() == nil:
@@ -102,7 +111,7 @@ func (k ExecKubectl) Run(ctx context.Context, run KubectlRun) (KubectlOutput, er
 		out.ExitCode = exit.ExitCode()
 		return out, nil
 	case err != nil:
-		return out, fmt.Errorf("run kubectl: %w", err)
+		return out, fmt.Errorf("run %s: %w", filepath.Base(bin), err)
 	}
 	return out, nil
 }
