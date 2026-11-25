@@ -59,7 +59,7 @@ export function ActivityBar({ collapsed, needs, onToggleSidebar, onSearch }: Act
           <span
             aria-hidden="true"
             data-testid="activity-needs"
-            className="bg-destructive text-destructive-foreground text-2xs absolute top-0 right-0 inline-flex min-w-4 items-center justify-center px-0.5 leading-4 font-semibold tabular-nums"
+            className="bg-destructive text-destructive-foreground text-label absolute top-0 right-0 inline-flex min-w-4 items-center justify-center px-0.5 leading-4 font-semibold tabular-nums"
           >
             {badgeText(needs)}
           </span>

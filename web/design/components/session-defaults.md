@@ -10,9 +10,9 @@ The Settings section where the owner chooses the model and reasoning effort new 
 
 - Each role is a group with a small heading and one muted line saying what it covers.
 - Rows sit in one box with a `border-border-subtle` edge and `divide-border-subtle` rules between them.
-- Selects are fields: `border-input bg-background text-foreground`, `min-h-control`, `text-ui`.
-- Labels above each select are `text-xs text-muted-foreground`.
-- The save line is `text-xs`: `text-muted-foreground` for Saving… and Saved., `text-destructive` for a refused save. The no-longer-offered note is `text-term-yellow`.
+- Selects are fields: `border-input bg-background text-foreground`, `min-h-control`, `text-body`.
+- Labels above each select are `text-caption text-muted-foreground`.
+- The save line is `text-caption`: `text-muted-foreground` for Saving… and Saved., `text-destructive` for a refused save. The no-longer-offered note is `text-term-yellow`.
 
 ## Layout
 

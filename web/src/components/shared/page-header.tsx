@@ -49,7 +49,7 @@ export function PageHeader({
     <header className="gap-xs flex flex-col" data-testid="page-header">
       <div className="gap-sm flex min-w-0 flex-wrap items-center">
         {back}
-        <h1 id={headingId} className="min-w-0 flex-1 text-lg font-medium break-words">
+        <h1 id={headingId} className="text-display min-w-0 flex-1 font-semibold break-words">
           {title}
         </h1>
         {status}
@@ -58,7 +58,7 @@ export function PageHeader({
         ) : null}
       </div>
       {description ? (
-        <p className="text-muted-foreground max-w-prose text-sm">{description}</p>
+        <p className="text-muted-foreground text-body max-w-prose">{description}</p>
       ) : null}
     </header>
   );

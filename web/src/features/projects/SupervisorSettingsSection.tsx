@@ -18,7 +18,7 @@ import {
 } from './model';
 
 const FIELD =
-  'border-input bg-background text-foreground px-sm min-h-control text-ui w-full min-w-0 border disabled:opacity-50';
+  'border-input bg-background text-foreground px-sm min-h-control text-field w-full min-w-0 border disabled:opacity-50';
 
 /**
  * The provider, model and effort of the project's standing supervisor. Each has a "default" choice,
@@ -46,12 +46,12 @@ export function SupervisorSettingsSection({ projectId }: { projectId: string }) 
       className="gap-md p-md border-border flex flex-col border"
       data-testid="supervisor-settings"
     >
-      <h3 id="supervisor-settings-heading" className="text-lg font-medium">
+      <h3 id="supervisor-settings-heading" className="text-title font-semibold">
         Supervisor
       </h3>
 
       {settings.isPending ? (
-        <p role="status" className="text-muted-foreground text-sm">
+        <p role="status" className="text-muted-foreground text-body">
           Loading the supervisor’s settings…
         </p>
       ) : null}
@@ -124,7 +124,7 @@ function SettingsForm({
         if (changed && !busy) onSave(draft);
       }}
     >
-      <p className="text-sm" data-testid="supervisor-settings-summary">
+      <p className="text-body" data-testid="supervisor-settings-summary">
         {view.provider_profile_id === null
           ? `Runs on ${inForce}, the project’s default provider.`
           : `Runs on ${inForce}, this project’s own choice.`}
@@ -132,7 +132,7 @@ function SettingsForm({
 
       <div className="gap-sm grid sm:grid-cols-3">
         <label htmlFor={`${id}-provider`} className="gap-xs flex min-w-0 flex-col">
-          <span className="text-muted-foreground text-xs">Provider</span>
+          <span className="text-muted-foreground text-caption">Provider</span>
           <select
             id={`${id}-provider`}
             className={FIELD}
@@ -161,7 +161,7 @@ function SettingsForm({
         </label>
 
         <label htmlFor={`${id}-model`} className="gap-xs flex min-w-0 flex-col">
-          <span className="text-muted-foreground text-xs">Model</span>
+          <span className="text-muted-foreground text-caption">Model</span>
           <select
             id={`${id}-model`}
             className={FIELD}
@@ -179,7 +179,7 @@ function SettingsForm({
         </label>
 
         <label htmlFor={`${id}-effort`} className="gap-xs flex min-w-0 flex-col">
-          <span className="text-muted-foreground text-xs">Effort</span>
+          <span className="text-muted-foreground text-caption">Effort</span>
           <select
             id={`${id}-effort`}
             className={FIELD}
@@ -202,26 +202,26 @@ function SettingsForm({
         </label>
       </div>
 
-      <p className="text-muted-foreground text-sm">
+      <p className="text-muted-foreground text-body">
         {options.models === null
           ? 'The project default’s models and efforts can be chosen once it is saved as the provider.'
           : 'Default uses your worker session default for the provider, or else the provider’s own.'}
       </p>
 
       {moves ? (
-        <p className="text-term-yellow text-sm" data-testid="supervisor-settings-restart-warning">
+        <p className="text-term-yellow text-body" data-testid="supervisor-settings-restart-warning">
           Saving this restarts the supervisor on the new provider. Its workers keep running.
         </p>
       ) : null}
 
       {saveError ? (
-        <p role="alert" className="text-destructive text-sm">
+        <p role="alert" className="text-destructive text-body">
           {saveError} Nothing was changed.
         </p>
       ) : null}
 
       {restarted && !changed ? (
-        <p role="status" className="text-sm" data-testid="supervisor-settings-restarting">
+        <p role="status" className="text-body" data-testid="supervisor-settings-restarting">
           The supervisor is restarting on {inForce}. Its workers keep running.
         </p>
       ) : null}

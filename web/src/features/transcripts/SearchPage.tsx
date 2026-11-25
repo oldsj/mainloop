@@ -61,13 +61,13 @@ export function TranscriptSearchPage({ search }: { search: TranscriptSearch }) {
             value={draft}
             maxLength={200}
             onChange={(event) => setDraft(event.target.value)}
-            className="placeholder:text-muted-foreground min-h-control min-w-0 flex-1 bg-transparent text-sm outline-none"
+            className="placeholder:text-muted-foreground min-h-control text-field min-w-0 flex-1 bg-transparent outline-none"
           />
         </div>
         <Button type="submit">Search</Button>
       </form>
       {scoped ? (
-        <p className="text-muted-foreground text-sm">
+        <p className="text-muted-foreground text-body">
           {search.session_id ? 'In one session only. ' : 'In one project only. '}
           <Link
             to="/transcripts"
@@ -81,7 +81,7 @@ export function TranscriptSearchPage({ search }: { search: TranscriptSearch }) {
       ) : null}
 
       {!q ? null : results.isPending ? (
-        <p role="status" className="text-muted-foreground text-sm">
+        <p role="status" className="text-muted-foreground text-body">
           Searching…
         </p>
       ) : results.isError ? (
@@ -92,7 +92,7 @@ export function TranscriptSearchPage({ search }: { search: TranscriptSearch }) {
           pending={results.isFetching}
         />
       ) : results.data.hits.length === 0 ? (
-        <p className="text-muted-foreground text-sm" data-testid="transcript-search-empty">
+        <p className="text-muted-foreground text-body" data-testid="transcript-search-empty">
           Nothing found for “{q}”.
         </p>
       ) : (
@@ -118,18 +118,20 @@ function HitRow({ hit }: { hit: TranscriptSearchHit }) {
         className="gap-xs hover:bg-muted p-xs flex flex-col"
       >
         <span className="gap-sm flex min-w-0 items-baseline">
-          <span className="min-w-0 flex-1 truncate text-sm font-medium">
+          <span className="text-body min-w-0 flex-1 truncate font-medium">
             {hit.session_title || 'Untitled session'}
           </span>
           {hit.at ? (
-            <span className="text-muted-foreground flex-none text-xs">{messageTime(hit.at)}</span>
+            <span className="text-muted-foreground text-caption flex-none">
+              {messageTime(hit.at)}
+            </span>
           ) : null}
         </span>
-        <span className="text-muted-foreground text-xs">
+        <span className="text-muted-foreground text-caption">
           {kind}
           {hit.tool_name ? ` · ${hit.tool_name}` : ''}
         </span>
-        <span className="text-xs [overflow-wrap:anywhere] whitespace-pre-wrap">
+        <span className="text-caption [overflow-wrap:anywhere] whitespace-pre-wrap">
           {hit.snippet.map((part, i) =>
             part.match ? (
               <mark key={i} className="bg-term-selection text-foreground">

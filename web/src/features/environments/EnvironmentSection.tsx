@@ -113,7 +113,7 @@ export function EnvironmentSection({ projectId }: { projectId: string }) {
       data-testid="project-environment"
     >
       <div className="gap-sm flex flex-wrap items-center justify-between">
-        <h3 id="environment-heading" className="text-lg font-medium">
+        <h3 id="environment-heading" className="text-title font-semibold">
           Environment
         </h3>
         <Button
@@ -129,7 +129,7 @@ export function EnvironmentSection({ projectId }: { projectId: string }) {
       </div>
 
       {selection.isPending ? (
-        <p role="status" className="text-muted-foreground text-sm">
+        <p role="status" className="text-muted-foreground text-body">
           Loading environment…
         </p>
       ) : null}
@@ -155,9 +155,9 @@ export function EnvironmentSection({ projectId }: { projectId: string }) {
       ) : null}
 
       {saved ? (
-        <p className="text-sm">{savedLine(saved, savedEnvironment)}</p>
+        <p className="text-body">{savedLine(saved, savedEnvironment)}</p>
       ) : selection.data ? (
-        <p className="text-muted-foreground text-sm">
+        <p className="text-muted-foreground text-body">
           No selection. New sessions use the configured native agent image.
         </p>
       ) : null}
@@ -181,7 +181,7 @@ export function EnvironmentSection({ projectId }: { projectId: string }) {
         />
       ) : null}
       {environmentList.isSuccess && environments.length === 0 ? (
-        <p className="text-muted-foreground text-sm">
+        <p className="text-muted-foreground text-body">
           No user-owned environments. Register a public image below to begin.
         </p>
       ) : null}
@@ -201,7 +201,7 @@ export function EnvironmentSection({ projectId }: { projectId: string }) {
       ) : null}
 
       {notice ? (
-        <p role="status" className="text-sm">
+        <p role="status" className="text-body">
           {notice}
         </p>
       ) : null}

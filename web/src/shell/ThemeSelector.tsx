@@ -44,7 +44,7 @@ export function ThemeSelector({ compact = false }: { compact?: boolean }) {
                 key={id}
                 value={id}
                 data-testid={`theme-${id}`}
-                className="gap-sm px-sm data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground min-h-control flex cursor-pointer items-center rounded-none text-sm outline-none data-[highlighted]:font-bold"
+                className="gap-sm px-sm data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground min-h-control text-body flex cursor-pointer items-center rounded-none outline-none data-[highlighted]:font-semibold"
               >
                 <span
                   data-theme={id === 'eighties' ? undefined : id}

@@ -28,7 +28,7 @@ export function HITLCard({ requestId }: HITLCardProps) {
   return (
     <div className="gap-sm grid">
       {task ? (
-        <p data-testid="hitl-task-link" className="px-md text-sm">
+        <p data-testid="hitl-task-link" className="px-md text-body">
           <Link
             to="/tasks/$id"
             params={{ id: task.task.id }}

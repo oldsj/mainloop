@@ -50,7 +50,7 @@ export function TranscriptView({ sessionId, entry }: { sessionId: string; entry?
       <div
         ref={scroller}
         data-testid="transcript"
-        className="px-md py-sm min-h-0 flex-1 overflow-y-auto overscroll-contain text-sm"
+        className="px-md py-sm text-body min-h-0 flex-1 overflow-y-auto overscroll-contain"
       >
         <div className={cn('gap-sm flex flex-col', CONVERSATION)}>
           {transcript.isPending ? (
@@ -69,7 +69,7 @@ export function TranscriptView({ sessionId, entry }: { sessionId: string; entry?
           ) : null}
 
           {unavailable.map((s) => (
-            <p key={s.created_at} role="note" className="text-term-warning text-xs">
+            <p key={s.created_at} role="note" className="text-term-warning text-caption">
               Part of this transcript could not be copied{s.reason ? `: ${s.reason}` : '.'}
             </p>
           ))}
@@ -104,7 +104,7 @@ export function TranscriptView({ sessionId, entry }: { sessionId: string; entry?
 
           {live.length > 0 ? (
             <section aria-label="Not stored yet" className="gap-sm flex flex-col">
-              <p className="text-term-fg-muted border-border-subtle pt-sm border-t text-xs">
+              <p className="text-term-fg-muted border-border-subtle pt-sm text-caption border-t">
                 Not stored yet: the turn still running, or just finished
               </p>
               {live.map((item) => (
@@ -114,7 +114,7 @@ export function TranscriptView({ sessionId, entry }: { sessionId: string; entry?
           ) : null}
 
           {last?.live_error ? (
-            <p role="note" className="text-term-warning text-xs">
+            <p role="note" className="text-term-warning text-caption">
               {last.live_error}
             </p>
           ) : null}
@@ -166,7 +166,7 @@ function SessionSearch({ sessionId }: { sessionId: string }) {
         value={q}
         maxLength={200}
         onChange={(event) => setQ(event.target.value)}
-        className="placeholder:text-muted-foreground min-h-control min-w-0 flex-1 bg-transparent text-sm outline-none"
+        className="placeholder:text-muted-foreground min-h-control text-field min-w-0 flex-1 bg-transparent outline-none"
       />
     </form>
   );
@@ -175,7 +175,7 @@ function SessionSearch({ sessionId }: { sessionId: string }) {
 function Cut({ e }: { e: TranscriptEntry }) {
   if (!e.truncated) return null;
   return (
-    <span className="text-term-fg-muted block text-xs">
+    <span className="text-term-fg-muted text-caption block">
       Cut to {e.text.length.toLocaleString()} of {e.orig_bytes.toLocaleString()} bytes when stored
     </span>
   );
@@ -235,7 +235,7 @@ function EntryItem({ e }: { e: TranscriptEntry }) {
       );
     default:
       return (
-        <p className="text-term-fg-muted pl-[2ch] text-xs [overflow-wrap:anywhere] whitespace-pre-wrap">
+        <p className="text-term-fg-muted text-caption pl-[2ch] [overflow-wrap:anywhere] whitespace-pre-wrap">
           {e.kind === 'ask' ? 'Asked: ' : ''}
           {e.text}
         </p>
@@ -256,7 +256,7 @@ function ToolItem({
   const input = call ? toolInput(call.text) : null;
   const firstLine = result?.text.split('\n').find((l) => l.trim()) ?? '';
   return (
-    <details data-testid="transcript-tool" className="min-w-0">
+    <details data-testid="transcript-tool" className="min-w-0 font-mono">
       <summary className="block min-w-0 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
         <span className="flex min-w-0 gap-[1ch]">
           <span
@@ -270,17 +270,19 @@ function ToolItem({
           >
             ●
           </span>
-          <span className="flex-none font-bold">{name}</span>
+          <span className="flex-none font-semibold">{name}</span>
           <span className="text-term-fg-muted min-w-0 truncate">{arg}</span>
           {result?.is_error ? (
-            <span className="text-term-error flex-none text-xs">error</span>
+            <span className="text-term-error text-caption flex-none">error</span>
           ) : null}
         </span>
         {firstLine ? (
-          <span className="text-term-fg-muted block truncate pl-[3ch] text-xs">⎿ {firstLine}</span>
+          <span className="text-term-fg-muted text-caption block truncate pl-[3ch]">
+            ⎿ {firstLine}
+          </span>
         ) : null}
       </summary>
-      <div className="gap-xs mt-xs flex flex-col pl-[3ch] text-xs">
+      <div className="gap-xs mt-xs text-caption flex flex-col pl-[3ch]">
         {call ? (
           <pre className="bg-term-bg-secondary p-xs m-0 [overflow-wrap:anywhere] whitespace-pre-wrap">
             {typeof input === 'string' ? input : JSON.stringify(input, null, 2)}

@@ -38,12 +38,12 @@ export function InstructionsSection({ projectId }: { projectId: string }) {
       className="gap-md p-md border-border flex flex-col border"
       data-testid="instructions"
     >
-      <h3 id="instructions-heading" className="text-lg font-medium">
+      <h3 id="instructions-heading" className="text-title font-semibold">
         Instructions
       </h3>
 
       {instructions.isPending ? (
-        <p role="status" className="text-muted-foreground text-sm">
+        <p role="status" className="text-muted-foreground text-body">
           Loading instructions…
         </p>
       ) : null}
@@ -126,20 +126,20 @@ function InstructionsForm({
 
   return (
     <div className="gap-md flex flex-col">
-      <p className="text-sm">{instructionsStatus(view, (iso) => relativeTime(iso))}</p>
-      <p className="text-muted-foreground text-sm">{INSTRUCTIONS_EXPLANATION}</p>
+      <p className="text-body">{instructionsStatus(view, (iso) => relativeTime(iso))}</p>
+      <p className="text-muted-foreground text-body">{INSTRUCTIONS_EXPLANATION}</p>
 
       {conflict ? (
         <div role="alert" className="gap-sm flex flex-col" data-testid="instructions-conflict">
-          <p className="text-term-yellow text-sm">
+          <p className="text-term-yellow text-body">
             The instructions changed to version {view.version} while you were editing. Your draft is
             kept. Review the current version, then save over it or discard your draft.
           </p>
-          <details className="text-sm" open>
+          <details className="text-body" open>
             <summary className="py-sm min-h-control cursor-pointer">
               Current version {view.version}
             </summary>
-            <pre className="p-sm border-border border text-xs break-words whitespace-pre-wrap">
+            <pre className="p-sm border-border text-caption border font-mono break-words whitespace-pre-wrap">
               {view.text || '(empty)'}
             </pre>
           </details>
@@ -153,11 +153,11 @@ function InstructionsForm({
           if (canSave) onSave(value);
         }}
       >
-        <label className="gap-xs flex flex-col text-sm">
+        <label className="gap-xs text-body flex flex-col">
           Instructions for agents
           <textarea
             aria-describedby="instructions-size"
-            className="border-input bg-background text-foreground p-sm w-full rounded-none border text-sm"
+            className="border-input bg-background text-foreground p-sm text-field w-full rounded-none border font-mono"
             rows={10}
             value={value}
             disabled={busy}
@@ -167,14 +167,14 @@ function InstructionsForm({
         </label>
         <p
           id="instructions-size"
-          className={state.over ? 'text-destructive text-sm' : 'text-muted-foreground text-sm'}
+          className={state.over ? 'text-destructive text-body' : 'text-muted-foreground text-body'}
         >
           {state.bytes.toLocaleString()} of {view.max_bytes.toLocaleString()} bytes
           {state.over ? ` (${(state.bytes - view.max_bytes).toLocaleString()} over)` : ''}
         </p>
 
         {saveError && !(staleSave && conflict) ? (
-          <p role="alert" className="text-destructive text-sm">
+          <p role="alert" className="text-destructive text-body">
             {failureText(saveError)}
           </p>
         ) : null}
@@ -205,7 +205,7 @@ function EarlierVersions({ projectId }: { projectId: string }) {
   const parsed = versions.data ? instructionVersionListSchema.safeParse(versions.data) : undefined;
 
   return (
-    <details className="text-sm" onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <details className="text-body" onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className="py-sm min-h-control cursor-pointer">Earlier versions</summary>
       {versions.isPending && open ? (
         <p role="status" className="text-muted-foreground">
@@ -232,7 +232,7 @@ function EarlierVersions({ projectId }: { projectId: string }) {
                 Version {v.version},{' '}
                 <time dateTime={v.created_at}>{new Date(v.created_at).toLocaleString()}</time>
               </span>
-              <pre className="p-sm border-border border text-xs break-words whitespace-pre-wrap">
+              <pre className="p-sm border-border text-caption border font-mono break-words whitespace-pre-wrap">
                 {v.text || '(cleared)'}
               </pre>
             </li>

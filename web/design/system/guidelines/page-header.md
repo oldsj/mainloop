@@ -8,9 +8,9 @@ The top of a page: the way back, the page's name, its status and its own actions
 
 ## Tokens
 
-- Title: the page's one `h1`, `text-lg font-medium`. No page uses a larger or bolder title.
+- Title: the page’s one `h1`, `text-display font-semibold`. No page uses a larger or bolder title.
 - Back: the shared icon button (`ghost`, `icon` size) with a left arrow, first on the row. Its class is `BACK_LINK`; the link is the caller's own, so its route is type-checked.
-- Description `text-muted-foreground text-sm`, no wider than a reading measure (`max-w-prose`).
+- Description `text-muted-foreground text-body`, no wider than a reading measure (`max-w-prose`).
 - Row gap `gap-sm`; the row wraps on a narrow screen, so actions drop under a long title.
 - Radius `rounded-none`. Tokens only.
 

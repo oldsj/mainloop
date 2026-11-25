@@ -35,7 +35,7 @@ export function ActivityList() {
 
   if (activity.isPending) {
     return (
-      <p role="status" className="text-muted-foreground p-md text-sm">
+      <p role="status" className="text-muted-foreground p-md text-body">
         Loading activity…
       </p>
     );
@@ -46,13 +46,13 @@ export function ActivityList() {
       {failure}
 
       {dismiss.isError && !refusalStale ? (
-        <p role="alert" className="text-destructive p-md text-sm">
+        <p role="alert" className="text-destructive p-md text-body">
           {messageOf(dismiss.error)}
         </p>
       ) : null}
 
       {items.length === 0 && !activity.isError ? (
-        <p className="text-muted-foreground p-md text-sm">No activity yet</p>
+        <p className="text-muted-foreground p-md text-body">No activity yet</p>
       ) : (
         <ul aria-label="Activity" className="flex flex-col">
           {items.map((item) => {
@@ -60,8 +60,8 @@ export function ActivityList() {
             const noticeId = item.dismissible ? item.queue_item_id : null;
             return (
               <li key={item.id} className="border-border-subtle p-md gap-xs flex flex-col border-b">
-                <h2 className="text-sm font-medium break-words">{item.title}</h2>
-                <p className="text-muted-foreground text-xs break-words whitespace-pre-wrap">
+                <h2 className="text-body font-medium break-words">{item.title}</h2>
+                <p className="text-muted-foreground text-caption break-words whitespace-pre-wrap">
                   {item.content}
                 </p>
                 {taskId || noticeId ? (
@@ -87,7 +87,7 @@ export function ActivityList() {
                     ) : null}
                   </div>
                 ) : null}
-                <time dateTime={item.created_at} className="text-muted-foreground text-xs">
+                <time dateTime={item.created_at} className="text-muted-foreground text-caption">
                   {new Date(item.created_at).toLocaleString()}
                 </time>
               </li>

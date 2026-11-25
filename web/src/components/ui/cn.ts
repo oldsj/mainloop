@@ -3,10 +3,10 @@ import { extendTailwindMerge } from 'tailwind-merge';
 
 /**
  * The font sizes the design tokens add to Tailwind's own (`font.size` in web/design/tokens.json).
- * tailwind-merge has to be told they are sizes: otherwise it reads `text-ui` as a text colour and
+ * tailwind-merge has to be told they are sizes: otherwise it reads `text-body` as a text colour and
  * drops it whenever a real colour class, such as `text-foreground`, comes later in the list.
  */
-const TOKEN_FONT_SIZES = ['2xs', 'ui'];
+const TOKEN_FONT_SIZES = ['label', 'caption', 'body', 'field', 'title', 'display'];
 
 const twMerge = extendTailwindMerge({ extend: { theme: { text: TOKEN_FONT_SIZES } } });
 

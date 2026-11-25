@@ -53,13 +53,13 @@ export function MemorySection({ projectId }: { projectId: string }) {
       className="gap-md flex flex-col"
       data-testid="project-memory"
     >
-      <h2 id="project-memory-heading" className="text-lg font-medium">
+      <h2 id="project-memory-heading" className="text-title font-semibold">
         Memory
       </h2>
-      <p className="text-muted-foreground text-sm">{MEMORY_EXPLANATION}</p>
+      <p className="text-muted-foreground text-body">{MEMORY_EXPLANATION}</p>
 
       {memory.isPending ? (
-        <p role="status" className="text-muted-foreground text-sm">
+        <p role="status" className="text-muted-foreground text-body">
           Loading memory…
         </p>
       ) : null}
@@ -82,7 +82,7 @@ export function MemorySection({ projectId }: { projectId: string }) {
       ) : null}
 
       {decide.error ? (
-        <p role="alert" className="text-destructive text-sm">
+        <p role="alert" className="text-destructive text-body">
           {failureText(decide.error)}
         </p>
       ) : null}
@@ -95,7 +95,7 @@ export function MemorySection({ projectId }: { projectId: string }) {
               className="gap-sm flex flex-col"
               data-testid="memory-proposals"
             >
-              <h3 id="memory-proposals-heading" className="text-sm font-medium">
+              <h3 id="memory-proposals-heading" className="text-body font-medium">
                 Waiting for you ({lists.proposed.length})
               </h3>
               <ul className="gap-sm flex flex-col">
@@ -122,14 +122,14 @@ export function MemorySection({ projectId }: { projectId: string }) {
             className="gap-sm flex flex-col"
             data-testid="memory-active"
           >
-            <h3 id="memory-active-heading" className="text-sm font-medium">
+            <h3 id="memory-active-heading" className="text-body font-medium">
               Active
             </h3>
-            <p className="text-muted-foreground text-xs">
+            <p className="text-muted-foreground text-caption">
               {view.used_bytes.toLocaleString()} of {view.max_bytes.toLocaleString()} bytes used
             </p>
             {lists.active.length === 0 ? (
-              <p className="text-muted-foreground text-sm">No memory yet.</p>
+              <p className="text-muted-foreground text-body">No memory yet.</p>
             ) : (
               <ul className="gap-sm flex flex-col">
                 {lists.active.map((entry) => (
@@ -167,11 +167,11 @@ function MemoryEntry({ entry, replaces, busy, pending, actions, onDecide }: Memo
       className="gap-xs p-md border-border flex flex-col border"
       data-testid={`memory-entry-${entry.id}`}
     >
-      <p className="text-sm break-words">{entry.text}</p>
+      <p className="text-body break-words">{entry.text}</p>
       {replaces ? (
-        <p className="text-muted-foreground text-xs break-words">Replaces: {replaces.text}</p>
+        <p className="text-muted-foreground text-caption break-words">Replaces: {replaces.text}</p>
       ) : null}
-      <p className="gap-sm text-muted-foreground flex flex-wrap items-center text-xs">
+      <p className="gap-sm text-muted-foreground text-caption flex flex-wrap items-center">
         <span>{memoryOrigin(entry, (iso) => relativeTime(iso))}</span>
         <EntrySource entry={entry} />
       </p>

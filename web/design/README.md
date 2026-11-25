@@ -16,7 +16,7 @@ The build writes two things:
 
 ## Components use tokens only
 
-Components in `web/` use token-backed utilities such as `bg-card`, `text-muted-foreground`, `border-border-subtle`, `text-ui`, `p-md`, `min-h-control` and `rounded-none`.
+Components in `web/` use token-backed utilities such as `bg-card`, `text-muted-foreground`, `border-border-subtle`, `text-body`, `p-md`, `min-h-control` and `rounded-none`.
 
 Do not put these in a component:
 
@@ -61,11 +61,23 @@ CI (`.github/workflows/web.yml`) regenerates the files and fails on any diff.
 
 ## Type
 
-Mainloop reads like an IDE around a terminal, and the whole app is set in one monospace, so the chrome matches the transcript.
+Two families, five size roles plus a field size, and three weights. They are tokens, and they are the only ones there are: the build clears Tailwind's own families, sizes and weights (`--font-*`, `--text-*` and `--font-weight-*: initial`), so `text-sm`, `font-bold` and `font-sans` produce nothing. `design/type.test.js` fails on any of them under `src/`, and on an arbitrary `text-[…]`.
 
-- `font.family.mono` is the only family and the page default (`body` sets it). It is SF Mono where the browser has it to give; everywhere else Geist Mono, one variable woff2 the app serves itself from `src/assets/fonts`, under the SIL OFL 1.1, so nobody installs a font and nothing comes from a font service. Navigation, page headings, buttons, forms, labels, status rows, the request cards, the transcript, its composer and code all use it.
-- Components set no font family: do not add `font-mono`, `font-sans` or `font-serif`. A test fails on any of them under `src/`.
-- Sizes: `2xs` (11 px) for group headings in small capitals, `xs` (12 px) for secondary lines, `ui` (13 px) for the chrome's default (rows, buttons), `sm` (14 px) for the transcript and page text, and `base` and up for titles. A size added to the tokens must also be added to `TOKEN_FONT_SIZES` in `src/components/ui/cn.ts`, or `cn` treats it as a text colour and drops it; a test checks this.
+- `font.family.sans`, the system UI font, is the page default (`body` sets it). The chrome, headings, buttons, forms, rows and the transcript's prose use it.
+- `font.family.mono` is opt-in through `font-mono`, for text that is code or that a machine reads: code spans and blocks, paths, branch names, shas, PR numbers, cron lines, globs, image digests, tool calls and their output, terminal blocks and the composer's footer row. It is SF Mono where the browser has it; everywhere else Geist Mono, one variable woff2 the app serves itself from `src/assets/fonts`, under the SIL OFL 1.1. Do not use mono to make text look technical.
+- Sizes, each with its own line height. A size with two values is one variable, like the control size: the touch value by default and the pointer value at 1024 px and wider with a mouse or trackpad.
+
+  | Role           | Pointer | Touch | Use                                                                                          |
+  | -------------- | ------- | ----- | -------------------------------------------------------------------------------------------- |
+  | `text-label`   | 11 px   | 11 px | Section headings, upper case, semibold, `tracking-wide`. Nothing else is upper case.         |
+  | `text-caption` | 12 px   | 12 px | A row's second line, ages, metadata, the status bar, help under a field.                     |
+  | `text-body`    | 13 px   | 15 px | The default: rows, tabs, buttons, prose.                                                     |
+  | `text-field`   | 13 px   | 16 px | Text the owner types: the composer and every field. 16 px stops a phone zooming in on focus. |
+  | `text-title`   | 15 px   | 17 px | A thread's, section's or dialog's name. Semibold.                                            |
+  | `text-display` | 20 px   | 20 px | The page's one `h1`. Semibold.                                                               |
+
+- Weights: `font-normal` (400), `font-medium` (500) for row titles and emphasis in the chrome, `font-semibold` (600) for headings and titles.
+- A size is never named after a colour (`text-input` would set both the size and `--color-input`); a test checks this. A size added to the tokens must also be added to `TOKEN_FONT_SIZES` in `src/components/ui/cn.ts`, or `cn` treats it as a text colour and drops it; a test checks this too.
 
 ## Control size
 
@@ -134,7 +146,6 @@ because the token generator replaces `system/`.
 Run `pnpm --dir web check:design` after building. It serves the built pages locally
 and checks each with axe in Chromium, failing on serious or critical violations
 and printing moderate/minor findings. It also loads each page 390 px wide (a phone) and fails
-when anything runs past the preview's edge, outside a scroll or clipping container: the app is
-monospace, which runs wider than a sans, so a row that fits on a desktop can push a control
-off-screen. Give a component whose row can get long a preview with its longest labels. Chromium is cached in CI; no backend or live
+when anything runs past the preview's edge, outside a scroll or clipping container: touch sizes
+are larger and mono runs wide, so a row that fits on a desktop can push a control off-screen. Give a component whose row can get long a preview with its longest labels. Chromium is cached in CI; no backend or live
 agent is used. Install it locally with `pnpm --dir web exec playwright install chromium`.

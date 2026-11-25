@@ -118,7 +118,7 @@ export function RowMenu({
           type="button"
           role="menuitem"
           tabIndex={-1}
-          className="hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent px-md min-h-control text-left text-sm outline-none"
+          className="hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent px-md min-h-control text-body text-left outline-none"
           onClick={() => {
             onClose(true);
             action.run();

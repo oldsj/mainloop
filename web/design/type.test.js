@@ -1,20 +1,39 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-// The type contract: the whole app is one monospace, so the chrome matches the transcript. The
-// generated theme carries that one family and the two chrome sizes, and no component picks another.
+// The type contract: the chrome and prose are the system sans, and code is the monospace. The
+// generated theme carries exactly the tokens' two families, five size roles (plus the field size)
+// and three weights, with Tailwind's own scale cleared, and no component reaches outside them.
 // A function, not a literal `new URL('…', import.meta.url)`: the bundler rewrites that form for assets.
 const at = (path) => new URL(path, import.meta.url);
 const read = (path) => readFileSync(at(path), 'utf8');
 const theme = read('../src/styles/theme.css');
 const base = read('../src/styles/index.css');
-const { family, size } = JSON.parse(read('./tokens.json')).font;
+const { family, size, weight } = JSON.parse(read('./tokens.json')).font;
+const keys = (group) => Object.keys(group).filter((key) => !key.startsWith('$'));
+
+/** Every source file under src/, with its text. */
+function sources() {
+  const src = at('../src/');
+  return readdirSync(src, { recursive: true })
+    .filter((name) => /\.(tsx?|css)$/.test(String(name)) && !String(name).endsWith('.gen.ts'))
+    .map((name) => ({
+      name: String(name),
+      text: readFileSync(new URL(String(name), src), 'utf8')
+    }));
+}
 
 describe('type', () => {
-  it('defines one family, a monospace', () => {
-    expect(Object.keys(family)).toEqual(['mono']);
+  it('defines two families: the system sans for the chrome and a monospace for code', () => {
+    expect(keys(family)).toEqual(['sans', 'mono']);
+    expect(family.sans.$value[0]).toBe('system-ui');
+    expect(family.sans.$value.at(-1)).toBe('sans-serif');
     expect(family.mono.$value.at(-1)).toBe('monospace');
-    expect(theme).not.toMatch(/--font-(sans|serif):/);
+    expect(theme).toMatch(/--font-sans: system-ui, [^;]*sans-serif;/);
+    // Tailwind's own families, sizes and weights are cleared, so only the tokens exist.
+    expect(theme).toContain('--font-*: initial;');
+    expect(theme).toContain('--text-*: initial;');
+    expect(theme).toContain('--font-weight-*: initial;');
     // SF Mono where the browser has it; otherwise Geist Mono, which the app serves itself.
     expect(theme).toMatch(
       /--font-mono:\s+ui-monospace, 'SF Mono', 'SFMono-Regular', 'Geist Mono', 'Menlo', monospace;/
@@ -47,31 +66,61 @@ describe('type', () => {
     );
   });
 
-  it('makes the monospace the page default', () => {
+  it('makes the sans, at the body size, the page default', () => {
     const body = /body \{[^}]*\}/.exec(base)?.[0] ?? '';
-    expect(body).toContain('font-family: var(--font-mono);');
-    expect(body).not.toContain('--font-sans');
+    expect(body).toContain('font-family: var(--font-sans);');
+    expect(body).toContain('font-size: var(--text-body);');
+    expect(body).not.toContain('--font-mono');
   });
 
-  it('leaves the family to the page: no component sets one', () => {
-    // Given every source file under src/
-    const src = at('../src/');
-    const files = readdirSync(src, { recursive: true }).filter((name) =>
-      /\.(tsx?|css)$/.test(String(name))
+  it('has five size roles and a field size, 13px body with a pointer and 15px on touch', () => {
+    expect(keys(size)).toEqual(['label', 'caption', 'body', 'field', 'title', 'display']);
+    expect(size.label.$value).toBe('0.6875rem');
+    expect(size.caption.$value).toBe('0.75rem');
+    expect(size.body.pointer.$value).toBe('0.8125rem');
+    expect(size.body.touch.$value).toBe('0.9375rem');
+    // A phone zooms in on a field under 16px.
+    expect(size.field.touch.$value).toBe('1rem');
+    expect(theme).toContain('--text-body: 0.9375rem;');
+    expect(theme).toMatch(
+      /@media[^{]*pointer: fine[^{]*\{\s*:root \{[^}]*--text-body: 0\.8125rem;/
     );
-    expect(files.length).toBeGreaterThan(0);
+  });
 
-    // Then none picks a family with a utility, so nothing escapes the one monospace
-    const offenders = files.filter((name) =>
-      /(?<![\w-])font-(sans|serif|mono)\b/.test(readFileSync(new URL(String(name), src), 'utf8'))
+  it('names no size after a colour, or its utility would set both', () => {
+    const colours = new Set([...theme.matchAll(/--color-([a-z-]+):/g)].map((m) => m[1]));
+    expect(keys(size).filter((name) => colours.has(name))).toEqual([]);
+  });
+
+  it('has three weights', () => {
+    expect(keys(weight)).toEqual(['normal', 'medium', 'semibold']);
+    expect(theme).toContain('--font-weight-semibold: 600;');
+  });
+
+  it('keeps components on the tokens: no stray family, size or weight', () => {
+    const files = sources();
+    expect(files.length).toBeGreaterThan(0);
+    const sizes = keys(size).join('|');
+    const weights = keys(weight).join('|');
+    const rules = [
+      // The sans is the page's own; mono is the only family a component names.
+      [/(?<![\w-])font-(sans|serif)\b/, 'font-sans or font-serif'],
+      // Sizes are the role tokens; Tailwind's scale is cleared, so its names would do nothing.
+      [
+        new RegExp(`(?<![\\w-])text-(?!(${sizes})\\b)(xs|sm|base|lg|[2-9]?xl|2xs|ui)\\b`),
+        'a size outside the tokens'
+      ],
+      [/(?<![\w-])text-\[\d/, 'an arbitrary text size'],
+      [
+        new RegExp(
+          `(?<![\\w-])font-(?!(${weights}|mono)\\b)(thin|extralight|light|bold|extrabold|black)\\b`
+        ),
+        'a weight outside the tokens'
+      ]
+    ];
+    const offenders = files.flatMap(({ name, text }) =>
+      rules.filter(([rule]) => rule.test(text)).map(([, what]) => `${name}: ${what}`)
     );
     expect(offenders).toEqual([]);
-  });
-
-  it('adds the 11px and 13px chrome sizes', () => {
-    expect(size['2xs'].$value).toBe('0.6875rem');
-    expect(size.ui.$value).toBe('0.8125rem');
-    expect(theme).toContain('--text-2xs: 0.6875rem;');
-    expect(theme).toContain('--text-ui: 0.8125rem;');
   });
 });

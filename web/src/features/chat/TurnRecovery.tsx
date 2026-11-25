@@ -58,7 +58,7 @@ export function TurnRecovery({ thread, offline, now = Date.now }: TurnRecoveryPr
   const ask = canRestart ? (stall ? 'Stop or restart?' : 'Restart?') : 'Stop it?';
   return (
     <div
-      className="border-border mx-md my-xs gap-sm p-sm flex shrink-0 flex-wrap items-center border text-sm"
+      className="border-border mx-md my-xs gap-sm p-sm text-body flex shrink-0 flex-wrap items-center border"
       data-testid="turn-recovery"
     >
       <p className="text-foreground min-w-0 flex-1 [overflow-wrap:anywhere]" role="status">

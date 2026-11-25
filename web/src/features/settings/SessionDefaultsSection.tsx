@@ -17,7 +17,7 @@ import {
 import { useProviders, useSessionDefaults, useSetSessionDefault } from './queries';
 
 const FIELD =
-  'border-input bg-background text-foreground px-sm min-h-control text-ui w-full min-w-0 border disabled:opacity-50';
+  'border-input bg-background text-foreground px-sm min-h-control text-field w-full min-w-0 border disabled:opacity-50';
 
 /** What a failed save says. The server's own sentence when it sent one. */
 function saveError(error: unknown): string {
@@ -37,10 +37,10 @@ export function SessionDefaultsSection() {
   return (
     <section aria-labelledby="session-defaults-heading" className="gap-md flex flex-col">
       <div className="gap-xs flex flex-col">
-        <h2 id="session-defaults-heading" className="text-base font-semibold">
+        <h2 id="session-defaults-heading" className="text-title font-semibold">
           Session defaults
         </h2>
-        <p className="text-muted-foreground max-w-measure text-sm">
+        <p className="text-muted-foreground max-w-measure text-body">
           The model and reasoning effort a new turn uses when the session has none of its own. A
           session’s <code>/model</code> or <code>/effort</code>, or a delegation’s choice, wins over
           these. A change reaches running sessions from their next turn.
@@ -57,11 +57,11 @@ export function SessionDefaultsSection() {
           }}
         />
       ) : defaults.data === undefined || providers.data === undefined ? (
-        <p role="status" className="text-muted-foreground text-sm">
+        <p role="status" className="text-muted-foreground text-body">
           Loading session defaults…
         </p>
       ) : profiles.length === 0 ? (
-        <p className="text-muted-foreground text-sm">
+        <p className="text-muted-foreground text-body">
           No provider is configured, so there is nothing to set a default for.
         </p>
       ) : (
@@ -74,10 +74,10 @@ export function SessionDefaultsSection() {
             data-testid={`session-defaults-${role.id}`}
           >
             <div className="gap-sm flex flex-wrap items-baseline">
-              <h3 id={`session-defaults-${role.id}`} className="text-sm font-semibold">
+              <h3 id={`session-defaults-${role.id}`} className="text-body font-semibold">
                 {role.label}
               </h3>
-              <span className="text-muted-foreground text-xs">{role.covers}</span>
+              <span className="text-muted-foreground text-caption">{role.covers}</span>
             </div>
             <div className="border-border-subtle divide-border-subtle divide-y border">
               {profiles.map((profile) => (
@@ -131,9 +131,9 @@ function DefaultRow({
       className="gap-sm p-sm grid grid-cols-1 items-end sm:grid-cols-[minmax(0,10rem)_minmax(0,1fr)_minmax(0,1fr)]"
       data-testid={`session-default-${role}-${profile.id}`}
     >
-      <div className="text-sm font-medium sm:pb-1">{profile.display_name}</div>
+      <div className="text-body font-medium sm:pb-1">{profile.display_name}</div>
       <label htmlFor={`${id}-model`} className="gap-xs flex min-w-0 flex-col">
-        <span className="text-muted-foreground text-xs">Model</span>
+        <span className="text-muted-foreground text-caption">Model</span>
         <select
           id={`${id}-model`}
           aria-label={`${roleLabel}, ${profile.display_name}: model`}
@@ -153,7 +153,7 @@ function DefaultRow({
         </select>
       </label>
       <label htmlFor={`${id}-effort`} className="gap-xs flex min-w-0 flex-col">
-        <span className="text-muted-foreground text-xs">Effort</span>
+        <span className="text-muted-foreground text-caption">Effort</span>
         <select
           id={`${id}-effort`}
           aria-label={`${roleLabel}, ${profile.display_name}: effort`}
@@ -173,7 +173,7 @@ function DefaultRow({
         </select>
       </label>
       {effortStale(profile, effort) ? (
-        <p className="text-term-yellow text-xs sm:col-span-3">
+        <p className="text-term-yellow text-caption sm:col-span-3">
           {profile.display_name} no longer offers “{effort}”, so turns leave the effort to the
           provider until another level is chosen.
         </p>
@@ -183,8 +183,8 @@ function DefaultRow({
         role={notice && !notice.ok ? 'alert' : 'status'}
         className={
           notice && !notice.ok
-            ? 'text-destructive min-h-4 text-xs sm:col-span-3'
-            : 'text-muted-foreground min-h-4 text-xs sm:col-span-3'
+            ? 'text-destructive text-caption min-h-4 sm:col-span-3'
+            : 'text-muted-foreground text-caption min-h-4 sm:col-span-3'
         }
         data-testid={`session-default-${role}-${profile.id}-notice`}
       >

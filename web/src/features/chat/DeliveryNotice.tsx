@@ -27,7 +27,7 @@ export function DeliveryNotice({ notice, onRetry, retryDisabled = false }: Deliv
       role="status"
       data-testid="delivery-notice"
       className={cn(
-        'mt-sm gap-x-md gap-y-xs px-sm py-xs bg-muted flex flex-wrap items-center border text-xs',
+        'mt-sm gap-x-md gap-y-xs px-sm py-xs bg-muted text-caption flex flex-wrap items-center border',
         NOTICE_STYLE[notice.state]
       )}
     >

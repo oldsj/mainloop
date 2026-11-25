@@ -50,19 +50,19 @@ export function LiveTurn({ frame, context = 'main', agentKind }: LiveTurnProps) 
       <div className="gap-xs flex flex-col">
         {/* aria-busy holds back the updates of live regions inside it, so the status sits outside. */}
         <div aria-busy={running} className="gap-xs flex flex-col">
-          <span className="text-term-accent shrink-0 text-xs md:text-sm" aria-hidden="true">
+          <span className="text-term-accent text-caption shrink-0 font-mono" aria-hidden="true">
             {agentLabel(agentKind)}@{context}$
           </span>
           {frame.text ? (
             <div className="min-w-0 flex-1" aria-hidden="true" data-testid="live-turn-text">
-              <Markdown className="text-foreground text-sm md:text-base">
+              <Markdown className="text-foreground text-body">
                 {frame.text_truncated ? `…${frame.text}` : frame.text}
               </Markdown>
             </div>
           ) : null}
           {tools.length > 0 ? (
             <ul
-              className="text-muted-foreground gap-0 text-xs"
+              className="text-muted-foreground text-caption gap-0 font-mono"
               aria-hidden="true"
               data-testid="live-turn-tools"
             >
@@ -86,7 +86,7 @@ export function LiveTurn({ frame, context = 'main', agentKind }: LiveTurnProps) 
             </ul>
           ) : null}
         </div>
-        <p className="text-muted-foreground gap-xs flex min-w-0 items-baseline text-xs">
+        <p className="text-muted-foreground gap-xs text-caption flex min-w-0 items-baseline">
           <span
             role="status"
             aria-live="polite"

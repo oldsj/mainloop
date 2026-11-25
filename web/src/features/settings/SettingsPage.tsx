@@ -19,27 +19,27 @@ export function SettingsPage() {
       <ImportProjectSection />
       <DevicesSection />
       <section aria-labelledby="appearance-heading" className="gap-sm flex flex-col">
-        <h2 id="appearance-heading" className="text-base font-semibold">
+        <h2 id="appearance-heading" className="text-title font-semibold">
           Appearance
         </h2>
         <div className="gap-sm flex flex-wrap items-center">
-          <span className="text-muted-foreground text-sm">Theme, kept in this browser.</span>
+          <span className="text-muted-foreground text-body">Theme, kept in this browser.</span>
           <ThemeSelector />
         </div>
       </section>
       {inNativeShell() ? (
         <section aria-labelledby="this-iphone-heading" className="gap-sm flex flex-col">
-          <h2 id="this-iphone-heading" className="text-base font-semibold">
+          <h2 id="this-iphone-heading" className="text-title font-semibold">
             This iPhone
           </h2>
           <div className="gap-sm flex flex-wrap items-center">
-            <span className="text-muted-foreground text-sm">
+            <span className="text-muted-foreground text-body">
               Its keys, Touch ID approvals, notifications and Sign out.
             </span>
             <button
               type="button"
               onClick={openNativeDeviceSettings}
-              className="px-sm border-border inline-flex min-h-11 items-center border text-sm font-medium hover:underline"
+              className="px-sm border-border inline-flex min-h-11 items-center border text-body font-medium hover:underline"
               data-testid="this-iphone"
             >
               Open
@@ -48,17 +48,17 @@ export function SettingsPage() {
         </section>
       ) : API_SAME_ORIGIN ? (
         <section aria-labelledby="account-heading" className="gap-sm flex flex-col">
-          <h2 id="account-heading" className="text-base font-semibold">
+          <h2 id="account-heading" className="text-title font-semibold">
             Account
           </h2>
           <div className="gap-sm flex flex-wrap items-center">
-            <span className="text-muted-foreground text-sm">
+            <span className="text-muted-foreground text-body">
               Signed in with Pocket ID. Signing out ends it in this browser.
             </span>
             {/* A full navigation: the gateway serves this path, not the app's router. */}
             <a
               href={SIGN_OUT_PATH}
-              className="px-sm border-border inline-flex min-h-11 items-center border text-sm font-medium hover:underline"
+              className="px-sm border-border text-body inline-flex min-h-11 items-center border font-medium hover:underline"
               data-testid="sign-out"
             >
               Sign out

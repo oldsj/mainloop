@@ -12,7 +12,7 @@ import {
 } from './model';
 
 const CONTROL =
-  'border-border bg-background text-foreground px-md min-h-control w-full min-w-0 border text-sm aria-[invalid=true]:border-destructive';
+  'border-border bg-background text-foreground px-md min-h-control w-full min-w-0 border text-field aria-[invalid=true]:border-destructive';
 
 export interface ScheduleFormProps {
   mode: 'create' | 'edit';
@@ -77,10 +77,10 @@ export function ScheduleForm({
     <form className="gap-lg flex min-w-0 flex-col" noValidate onSubmit={submit}>
       <fieldset disabled={disabled} className="gap-lg flex min-w-0 flex-col">
         {mode === 'edit' && agentLabel ? (
-          <p className="gap-xs flex flex-col text-sm">
+          <p className="gap-xs text-body flex flex-col">
             <span className="font-medium">Agent</span>
             <span className="text-muted-foreground break-all">{agentLabel}</span>
-            <span className="text-muted-foreground text-xs">
+            <span className="text-muted-foreground text-caption">
               An agent cannot change after the schedule is created.
             </span>
           </p>
@@ -149,7 +149,7 @@ export function ScheduleForm({
             <input
               id="schedule-cron"
               required
-              className={CONTROL}
+              className={`${CONTROL} font-mono`}
               maxLength={256}
               spellCheck={false}
               autoComplete="off"
@@ -173,7 +173,7 @@ export function ScheduleForm({
               <input
                 id="schedule-zone"
                 list="schedule-zone-options"
-                className={CONTROL}
+                className={`${CONTROL} font-mono`}
                 autoComplete="off"
                 spellCheck={false}
                 placeholder="UTC"
@@ -235,7 +235,7 @@ export function ScheduleForm({
         </Field>
 
         {mode === 'create' ? (
-          <label className="gap-sm px-md border-border min-h-control flex cursor-pointer items-center border text-sm">
+          <label className="gap-sm px-md border-border min-h-control text-body flex cursor-pointer items-center border">
             <input
               type="checkbox"
               className="size-4"
@@ -247,9 +247,9 @@ export function ScheduleForm({
         ) : null}
       </fieldset>
 
-      {notice ? <div className="gap-sm flex flex-col text-sm">{notice}</div> : null}
+      {notice ? <div className="gap-sm text-body flex flex-col">{notice}</div> : null}
       {error ? (
-        <p role="alert" className="text-destructive text-sm break-words">
+        <p role="alert" className="text-destructive text-body break-words">
           {error}
         </p>
       ) : null}
@@ -287,17 +287,17 @@ function Field({
     undefined;
   return (
     <div className="gap-xs flex min-w-0 flex-col">
-      <label htmlFor={id} className="text-sm font-medium">
+      <label htmlFor={id} className="text-body font-medium">
         {label}
       </label>
       {children(describedBy)}
       {hint ? (
-        <p id={`${id}-hint`} className="text-muted-foreground text-xs break-words">
+        <p id={`${id}-hint`} className="text-muted-foreground text-caption break-words">
           {hint}
         </p>
       ) : null}
       {error ? (
-        <p id={`${id}-error`} className="text-destructive text-xs break-words">
+        <p id={`${id}-error`} className="text-destructive text-caption break-words">
           {error}
         </p>
       ) : null}

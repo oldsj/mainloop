@@ -230,7 +230,7 @@ export function TaskActions({
       </h2>
 
       {blockers.length > 0 ? (
-        <div data-testid="task-blockers" className="gap-xs flex flex-col text-sm">
+        <div data-testid="task-blockers" className="gap-xs text-body flex flex-col">
           <p className="font-medium">Blocking a provider switch:</p>
           <ul className="gap-xs pl-lg flex list-disc flex-col">
             {blockers.map((blocker) => (
@@ -251,8 +251,8 @@ export function TaskActions({
             aria-label={`Unconfirmed ${kind} request`}
             className="gap-sm border-term-yellow/50 p-md flex flex-col border"
           >
-            <p className="text-sm break-words">{resendSummary(intent)}</p>
-            <p className="text-muted-foreground text-xs">
+            <p className="text-body break-words">{resendSummary(intent)}</p>
+            <p className="text-muted-foreground text-caption">
               Mainloop did not confirm this request. Resending reuses its request ID, so the server
               answers the original request rather than making a second one.
             </p>
@@ -274,9 +274,11 @@ export function TaskActions({
                 Discard
               </Button>
             </div>
-            {offline ? <p className="text-muted-foreground text-xs">Mainloop is offline.</p> : null}
+            {offline ? (
+              <p className="text-muted-foreground text-caption">Mainloop is offline.</p>
+            ) : null}
             {sending === kind ? (
-              <p role="status" className="text-muted-foreground text-xs">
+              <p role="status" className="text-muted-foreground text-caption">
                 Sending request…
               </p>
             ) : null}
@@ -340,28 +342,28 @@ export function TaskActions({
       </div>
 
       {answerInChat ? (
-        <p className="text-muted-foreground text-xs">
+        <p className="text-muted-foreground text-caption">
           The first two open the main chat with a message about this task, ready for you to send.
         </p>
       ) : null}
       {/* A disabled action keeps its reason on screen, named, so it is read with the button. */}
       {standing && !retryHidden ? (
-        <p className="text-muted-foreground text-xs" data-testid="task-restart-note">
+        <p className="text-muted-foreground text-caption" data-testid="task-restart-note">
           Restart gives the supervisor a new session on this same task. Its workers keep running.
         </p>
       ) : null}
       {!retryHidden && retry.reason ? (
-        <p className="text-muted-foreground text-xs">
+        <p className="text-muted-foreground text-caption">
           {retryLabel}: {retry.reason}
         </p>
       ) : null}
       {!cancelHidden && cancel.reason ? (
-        <p className="text-muted-foreground text-xs">
+        <p className="text-muted-foreground text-caption">
           {LABELS.cancel}: {cancel.reason}
         </p>
       ) : null}
       {cancelChanged ? (
-        <p role="status" className="text-muted-foreground text-xs">
+        <p role="status" className="text-muted-foreground text-caption">
           The task changed before you confirmed, so nothing was cancelled. Check it, then cancel
           again.
         </p>
@@ -369,12 +371,12 @@ export function TaskActions({
 
       {reassignHidden ? null : targets.length === 0 && profiles !== undefined && !profilesError ? (
         // Nobody to hand the task to: one line says so, in place of an empty picker.
-        <p className="text-muted-foreground text-xs" data-testid="task-reassign-none">
+        <p className="text-muted-foreground text-caption" data-testid="task-reassign-none">
           {LABELS.reassign}: {reassign.reason}
         </p>
       ) : (
         <div className="gap-xs flex flex-col">
-          <label htmlFor="reassign-target" className="text-sm font-medium">
+          <label htmlFor="reassign-target" className="text-body font-medium">
             Provider to reassign to
           </label>
           <div className="gap-sm flex flex-wrap items-center">
@@ -383,7 +385,7 @@ export function TaskActions({
               value={selected}
               disabled={targets.length === 0 || sending !== null || !reassignGate.enabled}
               onChange={(event) => setTarget(event.target.value)}
-              className="border-border text-foreground bg-background px-md min-h-control rounded-none border text-sm"
+              className="border-border text-foreground bg-background px-md min-h-control text-field rounded-none border"
             >
               {targets.map((profile) => (
                 <option key={profile.id} value={profile.id}>
@@ -402,7 +404,7 @@ export function TaskActions({
             </Button>
           </div>
           {reassign.reason ? (
-            <p className="text-muted-foreground text-xs">{reassign.reason}</p>
+            <p className="text-muted-foreground text-caption">{reassign.reason}</p>
           ) : null}
         </div>
       )}
@@ -411,11 +413,11 @@ export function TaskActions({
         <div
           role={notice.tone === 'info' ? 'status' : 'alert'}
           data-testid="task-action-notice"
-          className={`gap-xs flex flex-col text-sm ${NOTICE_CLASS[notice.tone]}`}
+          className={`gap-xs text-body flex flex-col ${NOTICE_CLASS[notice.tone]}`}
         >
           <p className="break-words">{notice.text}</p>
           {notice.reason ? (
-            <p className="text-xs">
+            <p className="text-caption">
               Server reason: <code>{notice.reason}</code>
             </p>
           ) : null}

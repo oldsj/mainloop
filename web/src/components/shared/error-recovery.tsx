@@ -23,7 +23,7 @@ export function ErrorRecovery({
   return (
     <div
       role="alert"
-      className="gap-sm border-destructive p-md text-foreground grid rounded-none border text-sm"
+      className="gap-sm border-destructive p-md text-foreground text-body grid rounded-none border"
     >
       <p className="text-destructive font-medium">{title}</p>
       <p className="text-muted-foreground break-words">{message}</p>

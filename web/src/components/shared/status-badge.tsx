@@ -13,7 +13,7 @@ export function StatusBadge({ label, tone, className }: StatusBadgeProps) {
   return (
     <span
       className={cn(
-        'px-sm py-xs inline-flex items-center border text-xs font-medium tracking-wide uppercase',
+        'px-sm py-xs text-caption inline-flex items-center border font-medium tracking-wide uppercase',
         toneClass(tone),
         className
       )}

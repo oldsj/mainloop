@@ -19,7 +19,7 @@ import {
 } from './loops';
 
 const PANEL = 'gap-sm p-md border-border-subtle flex flex-col border-t';
-const HEADING = 'text-muted-foreground text-2xs font-medium tracking-wide uppercase';
+const HEADING = 'text-muted-foreground text-label font-medium tracking-wide uppercase';
 
 /**
  * The task's loops: those watching it and those its supervisor armed, live ones first. Each shows
@@ -30,7 +30,7 @@ export function TaskLoops({ taskId, offline }: { taskId: string; offline: boolea
   const loops = useTaskLoops(taskId);
   if (loops.data === undefined || loops.data.length === 0) {
     return loops.isError ? (
-      <p role="status" className="px-md pt-sm text-muted-foreground text-xs">
+      <p role="status" className="px-md pt-sm text-muted-foreground text-caption">
         Loops could not be loaded.
       </p>
     ) : null;
@@ -41,7 +41,7 @@ export function TaskLoops({ taskId, offline }: { taskId: string; offline: boolea
         Loops
       </h2>
       {loops.isError ? (
-        <p role="status" className="text-muted-foreground text-xs">
+        <p role="status" className="text-muted-foreground text-caption">
           Could not refresh the loops. Showing the last known state.
         </p>
       ) : null}
@@ -63,7 +63,7 @@ export function MainLoops({ offline }: { offline: boolean }) {
   const loops = useMainLoops();
   if (loops.data === undefined || loops.data.length === 0) {
     return loops.isError ? (
-      <p role="status" className="px-md py-xs text-muted-foreground text-xs">
+      <p role="status" className="px-md py-xs text-muted-foreground text-caption">
         Main's loops could not be loaded.
       </p>
     ) : null;
@@ -74,7 +74,7 @@ export function MainLoops({ offline }: { offline: boolean }) {
         Main's loops
       </h2>
       {loops.isError ? (
-        <p role="status" className="text-muted-foreground text-xs">
+        <p role="status" className="text-muted-foreground text-caption">
           Could not refresh the loops. Showing the last known state.
         </p>
       ) : null}
@@ -188,7 +188,7 @@ function LoopItem({
   const disabled = offline || busy !== null;
 
   return (
-    <li className="gap-xs flex flex-col text-sm" data-testid="task-loop">
+    <li className="gap-xs text-body flex flex-col" data-testid="task-loop">
       <div className="gap-sm flex flex-wrap items-center">
         <p className="font-medium break-words">{loopTrigger(loop, pageTaskId)}</p>
         <StatusBadge
@@ -196,7 +196,7 @@ function LoopItem({
           tone={loop.state === 'armed' ? 'active' : loop.stop_reason ? 'attention' : 'muted'}
         />
       </div>
-      <p className="text-muted-foreground text-xs">
+      <p className="text-muted-foreground text-caption">
         {facts.join(' · ')}
         {pageTaskId === null && loop.task_id ? (
           <>
@@ -209,19 +209,19 @@ function LoopItem({
       </p>
       <p className="break-words whitespace-pre-wrap">{loop.note}</p>
       {loop.stop_reason === 'no_progress' ? (
-        <p className="text-muted-foreground text-xs">
+        <p className="text-muted-foreground text-caption">
           Three checks in a row found the task unchanged, so the loop stopped and asked you to
           decide.
         </p>
       ) : null}
       {loop.recent_firings.length > 0 ? (
         <details>
-          <summary className="text-muted-foreground min-h-control cursor-pointer text-xs">
+          <summary className="text-muted-foreground min-h-control text-caption cursor-pointer">
             Latest firings
           </summary>
           <ul className="gap-sm pt-xs flex flex-col">
             {loop.recent_firings.map((f) => (
-              <li key={f.number} className="text-xs">
+              <li key={f.number} className="text-caption">
                 <p className="text-muted-foreground">
                   #{f.number} · {messageTime(f.created_at)} · {f.delivery_state}
                 </p>
@@ -307,7 +307,7 @@ function LoopItem({
         </div>
       ) : null}
       {error ? (
-        <p role="alert" className="text-xs">
+        <p role="alert" className="text-caption">
           {error}
         </p>
       ) : null}

@@ -45,12 +45,12 @@ const versionOf = (view: ScheduleView): Version => ({ etag: view.etag, config: v
 export function ScheduleDetailPage({ id }: { id: string }) {
   const schedule = useSchedule(id);
 
-  if (schedule.isPending) return <p className="p-md text-sm">Loading schedule…</p>;
+  if (schedule.isPending) return <p className="p-md text-body">Loading schedule…</p>;
 
   if (statusOf(schedule.error) === 404) {
     return (
       <div className="gap-md p-md flex flex-col">
-        <p className="text-sm font-medium">This schedule no longer exists.</p>
+        <p className="text-body font-medium">This schedule no longer exists.</p>
         <Link
           to="/schedules"
           className="text-foreground min-h-control inline-flex items-center underline"
@@ -265,18 +265,18 @@ function ScheduleEditor({ id, latest }: { id: string; latest: ScheduleView }) {
       </div>
 
       {message ? (
-        <p role="status" className="text-foreground text-sm break-words">
+        <p role="status" className="text-foreground text-body break-words">
           {message}
         </p>
       ) : null}
       {actionError ? (
-        <p role="alert" className="text-destructive text-sm break-words">
+        <p role="alert" className="text-destructive text-body break-words">
           {actionError}
         </p>
       ) : null}
 
       <section aria-labelledby="edit-heading" className="gap-md flex min-w-0 flex-col">
-        <h2 id="edit-heading" className="text-base font-medium">
+        <h2 id="edit-heading" className="text-title font-semibold">
           Edit
         </h2>
         <ScheduleForm
@@ -311,13 +311,13 @@ function ScheduleEditor({ id, latest }: { id: string; latest: ScheduleView }) {
 /** The saved values, shown beside a conflict so the user can compare them with their edits. */
 function SavedValues({ config }: { config: Config }) {
   return (
-    <div className="gap-xs flex min-w-0 flex-col text-sm">
+    <div className="gap-xs text-body flex min-w-0 flex-col">
       <p className="font-medium">Latest saved values</p>
-      <dl className="gap-x-md gap-y-xs grid grid-cols-[auto_1fr] text-xs">
+      <dl className="gap-x-md gap-y-xs text-caption grid grid-cols-[auto_1fr]">
         <dt className="text-muted-foreground">Name</dt>
         <dd className="min-w-0 [overflow-wrap:anywhere]">{config.name || '—'}</dd>
         <dt className="text-muted-foreground">Schedule</dt>
-        <dd className="break-all">{config.schedule}</dd>
+        <dd className="font-mono break-all">{config.schedule}</dd>
         <dt className="text-muted-foreground">Time zone</dt>
         <dd className="break-all">{config.time_zone}</dd>
         <dt className="text-muted-foreground">Timeout (s)</dt>
@@ -326,10 +326,10 @@ function SavedValues({ config }: { config: Config }) {
         <dd>{config.paused ? 'Paused' : 'Active'}</dd>
       </dl>
       <details>
-        <summary className="text-foreground min-h-control inline-flex cursor-pointer items-center text-xs underline">
+        <summary className="text-foreground min-h-control text-caption inline-flex cursor-pointer items-center underline">
           Latest saved prompt
         </summary>
-        <pre className="text-xs break-words whitespace-pre-wrap">{config.prompt}</pre>
+        <pre className="text-caption break-words whitespace-pre-wrap">{config.prompt}</pre>
       </details>
     </div>
   );

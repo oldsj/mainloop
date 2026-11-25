@@ -23,7 +23,7 @@ describe('control size', () => {
   it('applies the pointer size only in the desktop layout with a fine pointer', () => {
     const values = [...css.matchAll(/--spacing-control: ([^;]+);/g)].map((m) => m[1]);
     expect(values).toEqual([touch.$value, pointer.$value]);
-    const media = /@media ([^{]+) \{\s*:root \{\s*--spacing-control: ([^;]+);/.exec(css);
+    const media = /@media ([^{]+) \{\s*:root \{[^}]*?--spacing-control: ([^;]+);/.exec(css);
     expect(media?.[1]).toBe(`${DESKTOP_QUERY} and (pointer: fine)`);
     expect(media?.[2]).toBe(pointer.$value);
   });

@@ -52,7 +52,7 @@ export function WebFetchSection({ sessionId }: { sessionId: string }) {
               });
             }}
             className={cn(
-              'border-border-subtle hover:bg-accent min-h-control border-l text-xs first:border-l-0 disabled:pointer-events-none disabled:opacity-50',
+              'border-border-subtle hover:bg-accent min-h-control text-caption border-l first:border-l-0 disabled:pointer-events-none disabled:opacity-50',
               enabled === choice.value && 'bg-term-selection'
             )}
             data-testid={`web-fetch-${choice.label.toLowerCase()}`}
@@ -61,17 +61,17 @@ export function WebFetchSection({ sessionId }: { sessionId: string }) {
           </button>
         ))}
       </div>
-      <p className="text-muted-foreground text-xs">
+      <p className="text-muted-foreground text-caption">
         Lets this agent read public web pages. Every fetch is recorded. Turning it off applies to
         its next call; turning it on, when it next lists its tools.
       </p>
       {state?.from_task ? (
-        <p className="text-muted-foreground text-xs" data-testid="web-fetch-from-task">
+        <p className="text-muted-foreground text-caption" data-testid="web-fetch-from-task">
           Its task was created with web fetch, so the agent has it either way.
         </p>
       ) : null}
       {set.isError ? (
-        <p role="alert" className="text-destructive text-xs">
+        <p role="alert" className="text-destructive text-caption">
           Web fetch was not changed. Try again.
         </p>
       ) : null}

@@ -128,9 +128,10 @@ export function PreviewSignIn({
 
   return (
     <main className="gap-md p-lg mx-auto flex max-w-prose flex-col">
-      <h1 className="text-base font-medium">Opening preview</h1>
-      <p className="text-muted-foreground text-sm">
-        Port {port} of workspace <span className="break-all">{workspaceId}</span>
+      <h1 className="text-display font-semibold">Opening preview</h1>
+      <p className="text-muted-foreground text-body">
+        Port <span className="font-mono">{port}</span> of workspace{' '}
+        <span className="font-mono break-all">{workspaceId}</span>
       </p>
       {problem ? (
         <ErrorRecovery
@@ -140,7 +141,7 @@ export function PreviewSignIn({
           pending={grant.isPending}
         />
       ) : (
-        <p role="status" className="text-muted-foreground text-sm">
+        <p role="status" className="text-muted-foreground text-body">
           Signing in to the preview…
         </p>
       )}

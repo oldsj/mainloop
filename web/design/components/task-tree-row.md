@@ -9,7 +9,7 @@ One task in the project task tree, on one line. A row shows what the list can sa
 ## Tokens
 
 - Status dot: the shared `StatusDot`, 8 px, in the status language the explorer uses. Amber (`status-working`) while the task works; red (`status-attention`) when it needs the owner; hollow (`status-idle` edge) at rest.
-- Title `text-sm`, truncated with an ellipsis. State and age `text-muted-foreground text-xs`.
+- Title `text-body`, truncated with an ellipsis. State and age `text-muted-foreground text-caption`.
 - Row height is the control height (`min-h-control`). Hover `bg-accent`. No border between rows; a `border-border-subtle` hairline above each top-level task sets it and its children apart from the one before.
 - Indent is 16 px per level, with a 1 px `bg-border` guide line for each level above the row.
 - Radius `rounded-none`. Tokens only: no colour literals.

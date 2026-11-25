@@ -35,7 +35,7 @@ describe('page header', () => {
   it('is the page’s one h1, at the same size on every page', () => {
     render(<PageHeader title="Settings" headingId="settings-heading" />);
     const title = screen.getByRole('heading', { level: 1, name: 'Settings' });
-    expect(title).toHaveClass('text-lg', 'font-medium');
+    expect(title).toHaveClass('text-display', 'font-semibold');
     expect(title).toHaveAttribute('id', 'settings-heading');
     // A top-level page has no back link, no actions and no description.
     expect(screen.queryByRole('link')).toBeNull();

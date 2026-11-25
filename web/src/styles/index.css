@@ -32,8 +32,13 @@
     margin: 0;
     background-color: var(--background);
     color: var(--foreground);
-    /* One monospace for the whole app: the chrome matches the transcript. */
-    font-family: var(--font-mono);
+    /* The system sans for the chrome and prose; code and machine text opt into font-mono. */
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: var(--text-body--line-height);
+    /* Light text on a dark ground renders heavier without this on macOS. */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     /* Every digit is the same width, so counts, ages and times line up and do not shift as they change. */
     font-variant-numeric: tabular-nums;
     min-height: 100dvh;

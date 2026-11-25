@@ -8,9 +8,9 @@ One scheduled run at a glance: its name, when it runs in plain words, whether it
 
 ## Tokens
 
-- Name `text-foreground`, medium weight, `text-sm`.
+- Name `text-foreground`, medium weight, `text-body`.
 - Plain-words line `text-foreground`. An invalid expression switches it to `text-destructive`.
-- The raw five-field expression and the labels `text-muted-foreground`, `text-xs`, in the mono font for the expression.
+- The raw five-field expression and the labels `text-muted-foreground`, `text-caption`, in the mono font for the expression.
 - State badge uses the status badge tokens: `muted` for paused, `ok` for active.
 - Card border `border-border`, radius `rounded-none`, padding `p-md`.
 

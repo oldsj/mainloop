@@ -43,7 +43,7 @@ export function TaskTree({ projectId }: { projectId?: string }) {
       );
     }
     return (
-      <p role="alert" className="p-md text-destructive text-sm">
+      <p role="alert" className="p-md text-destructive text-body">
         Could not load tasks: {errorText(list.error)}
       </p>
     );
@@ -56,19 +56,19 @@ export function TaskTree({ projectId }: { projectId?: string }) {
   return (
     <section aria-label="Tasks" className="flex flex-col">
       {list.isError ? (
-        <p role="alert" className="p-md text-destructive text-sm">
+        <p role="alert" className="p-md text-destructive text-body">
           Could not load tasks: {errorText(list.error)}.{' '}
           {rows.length > 0 ? 'Showing the last known state.' : null}
         </p>
       ) : null}
       {unreadableCount > 0 ? (
-        <p role="status" className="px-md pt-sm text-term-yellow text-sm">
+        <p role="status" className="px-md pt-sm text-term-yellow text-body">
           {unreadableTasksText(unreadableCount)}
         </p>
       ) : null}
       {rows.length === 0 ? (
         list.isError || unreadableCount > 0 ? null : (
-          <p className="p-md text-muted-foreground text-sm">No tasks yet.</p>
+          <p className="p-md text-muted-foreground text-body">No tasks yet.</p>
         )
       ) : (
         <ul data-testid="task-list" className="flex flex-col">
@@ -89,7 +89,7 @@ export function TaskTree({ projectId }: { projectId?: string }) {
           aria-expanded={showCancelled}
           data-testid="task-list-cancelled-toggle"
           onClick={() => setShowCancelled((open) => !open)}
-          className="border-border-subtle text-muted-foreground hover:text-foreground px-md min-h-control border-t text-left text-xs underline"
+          className="border-border-subtle text-muted-foreground hover:text-foreground px-md min-h-control text-caption border-t text-left underline"
         >
           {showCancelled
             ? 'Hide cancelled tasks'
@@ -169,7 +169,7 @@ function TaskRow({
       <Link
         to="/tasks/$id"
         params={{ id: view.task.id }}
-        className="gap-sm pr-sm min-h-control hover:bg-accent hover:text-accent-foreground relative flex items-center text-sm"
+        className="gap-sm pr-sm min-h-control hover:bg-accent hover:text-accent-foreground text-body relative flex items-center"
         style={{ paddingLeft: `${depth * INDENT_PX + GUTTER_PX}px` }}
       >
         {Array.from({ length: depth }, (_, level) => (
@@ -186,13 +186,13 @@ function TaskRow({
         {/* A narrow screen keeps the status word alone, so the state is never colour only. */}
         <span
           data-testid="task-status"
-          className="text-muted-foreground shrink-0 text-xs sm:hidden"
+          className="text-muted-foreground text-caption shrink-0 sm:hidden"
         >
           {statusLabel(view.task.status)}
         </span>
         <span
           data-testid="task-state"
-          className="text-muted-foreground hidden min-w-0 shrink truncate text-right text-xs sm:inline"
+          className="text-muted-foreground text-caption hidden min-w-0 shrink truncate text-right sm:inline"
         >
           {state}
         </span>
@@ -200,7 +200,7 @@ function TaskRow({
           <time
             dateTime={view.task.updated_at}
             data-testid="task-age"
-            className="text-muted-foreground w-8 shrink-0 text-right text-xs"
+            className="text-muted-foreground text-caption w-8 shrink-0 text-right"
           >
             {relativeAge(Math.max(0, now - changed))}
           </time>

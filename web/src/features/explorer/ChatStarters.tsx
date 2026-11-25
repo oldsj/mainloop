@@ -29,7 +29,7 @@ export function ChatStarters() {
   return (
     <div className="gap-sm px-md flex flex-col items-center">
       {/* Work starts from the chat: there is no create button anywhere, so the empty thread says so. */}
-      <p className="text-muted-foreground text-center text-xs">
+      <p className="text-muted-foreground text-caption text-center">
         Ask Mainloop to start, stop or change anything.
       </p>
       <div role="group" aria-label="Suggestions" className="gap-xs flex flex-wrap justify-center">

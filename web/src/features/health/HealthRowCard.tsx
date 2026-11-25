@@ -51,26 +51,26 @@ export function HealthRowCard({
             <span className="font-medium break-words">{rowTitle(row)}</span>
             {/* A session's own name does not say it has no task; "Unassigned" already does. */}
             {isUnassigned(row) && rowTitle(row) !== UNASSIGNED ? (
-              <span className="text-muted-foreground text-xs" data-testid="health-row-no-task">
+              <span className="text-muted-foreground text-caption" data-testid="health-row-no-task">
                 {NO_TASK}
               </span>
             ) : null}
           </span>
-          <span className="text-muted-foreground text-xs">
+          <span className="text-muted-foreground text-caption">
             {coverageText(totals.coverage)} · Details
           </span>
         </span>
-        <span className="gap-x-md gap-y-sm mt-sm grid grid-cols-2 text-sm sm:grid-cols-4">
+        <span className="gap-x-md gap-y-sm mt-sm text-body grid grid-cols-2 sm:grid-cols-4">
           <Metric label="Failures" value={countText(totals.failures)} />
           <Metric label="Repeated groups" value={countText(totals.repeated_failure_groups)} />
           <Metric label="Input" value={countText(totals.input_tokens)} />
           <Metric label="Output" value={countText(totals.output_tokens)} />
         </span>
-        <span className="text-muted-foreground mt-sm block text-xs">{usageLine(row)}</span>
+        <span className="text-muted-foreground mt-sm text-caption block">{usageLine(row)}</span>
       </button>
 
       {expanded ? (
-        <div id={panelId} className="gap-md mt-md grid text-sm">
+        <div id={panelId} className="gap-md mt-md text-body grid">
           {row.task_id ? (
             <Link
               to="/tasks/$id"

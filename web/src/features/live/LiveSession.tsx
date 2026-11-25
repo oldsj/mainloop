@@ -309,7 +309,7 @@ export function LiveSessionView({
       aria-label="Live session"
       data-testid="live-session"
       data-conn={conn}
-      className="bg-term-bg text-term-fg flex min-h-0 flex-1 flex-col text-sm"
+      className="bg-term-bg text-term-fg text-body flex min-h-0 flex-1 flex-col"
     >
       {renderBar ? (
         renderBar(bar)
@@ -330,8 +330,8 @@ export function LiveSessionView({
             CONVERSATION
           )}
         >
-          <div className="text-term-warning font-bold">Live view unavailable</div>
-          <div className="text-term-fg-muted text-xs">
+          <div className="text-term-warning font-semibold">Live view unavailable</div>
+          <div className="text-term-fg-muted text-caption">
             The session&apos;s runner is not answering. It may be waking, or its agent may not run
             the SDK runner yet. Still retrying every few seconds.
           </div>
@@ -417,7 +417,8 @@ function Log({
         ))}
         {state.activity ? (
           <div className="text-term-warning">
-            ✻ {state.activity}… <span className="text-term-fg-muted text-xs">esc to interrupt</span>
+            ✻ {state.activity}…{' '}
+            <span className="text-term-fg-muted text-caption">esc to interrupt</span>
           </div>
         ) : null}
         {requests ? <div>{requests}</div> : null}
@@ -478,7 +479,7 @@ function UserRow({
         <span className="text-term-accent">❯ </span>
         {text}
         {queued ? (
-          <span className="text-term-fg-muted text-xs">
+          <span className="text-term-fg-muted text-caption">
             {joins ? ' queued · joins this turn' : ' queued · sends when this turn ends'}
           </span>
         ) : null}
@@ -488,7 +489,7 @@ function UserRow({
           type="button"
           aria-expanded={expanded}
           onClick={() => setExpanded((open) => !open)}
-          className="text-term-fg-muted hover:text-term-fg min-h-control text-xs underline"
+          className="text-term-fg-muted hover:text-term-fg min-h-control text-caption underline"
           data-testid="live-user-toggle"
         >
           {expanded ? 'Show less' : 'Show all'}
@@ -522,19 +523,19 @@ const Row = memo(function Row({
         </div>
       );
     case 'sys':
-      return <div className="text-term-fg-muted pl-[2ch] text-xs">{e.text}</div>;
+      return <div className="text-term-fg-muted text-caption pl-[2ch]">{e.text}</div>;
     case 'interrupted':
-      return <div className="text-term-fg-muted pl-[2ch] text-xs">⎿ Interrupted</div>;
+      return <div className="text-term-fg-muted text-caption pl-[2ch]">⎿ Interrupted</div>;
     case 'tool':
       return <ToolRow entry={e} />;
     case 'diff':
       return (
-        <div className="border-border overflow-x-auto border text-xs">
+        <div className="border-border text-caption overflow-x-auto border">
           <div className="text-term-fg-muted px-sm py-xs border-border-subtle border-b">
             {e.verb} {e.file} · +{e.lines.filter((l) => l[0] === '+').length} −
             {e.lines.filter((l) => l[0] === '-').length}
           </div>
-          <pre className="py-xs m-0">
+          <pre className="py-xs m-0 font-mono">
             {e.lines.map((l, i) => (
               <span
                 key={i}
@@ -574,7 +575,7 @@ function ToolRow({ entry: e }: { entry: Extract<Entry, { t: 'tool' }> }) {
         >
           ●
         </span>
-        <span className="flex-none font-bold">{e.name}</span>
+        <span className="flex-none font-semibold">{e.name}</span>
         <span
           className={cn(
             'text-term-fg-muted min-w-0',
@@ -588,7 +589,7 @@ function ToolRow({ entry: e }: { entry: Extract<Entry, { t: 'tool' }> }) {
         <span
           data-testid="live-tool-out"
           className={cn(
-            'text-term-fg-muted block pl-[3ch] text-xs [overflow-wrap:anywhere] whitespace-pre-wrap',
+            'text-term-fg-muted text-caption block pl-[3ch] [overflow-wrap:anywhere] whitespace-pre-wrap',
             e.status === 'err' && 'text-term-error'
           )}
         >
@@ -602,7 +603,7 @@ function ToolRow({ entry: e }: { entry: Extract<Entry, { t: 'tool' }> }) {
         <span
           data-testid="live-tool-out"
           className={cn(
-            'text-term-fg-muted flex min-w-0 pl-[1ch] text-xs whitespace-pre',
+            'text-term-fg-muted text-caption flex min-w-0 pl-[1ch] whitespace-pre',
             e.status === 'err' && 'text-term-error'
           )}
         >
@@ -632,7 +633,7 @@ function PermCard({
     const denied = perm.chosen === 2 || perm.chosen === -1;
     const label = perm.chosen === -1 ? 'cancelled' : denied ? 'No' : 'Yes';
     return (
-      <div className="text-term-fg-muted text-xs [overflow-wrap:anywhere]">
+      <div className="text-term-fg-muted text-caption [overflow-wrap:anywhere]">
         {perm.tool}({perm.arg.length > 48 ? perm.arg.slice(0, 48) + '…' : perm.arg}) →{' '}
         <span className={denied ? 'text-term-error' : 'text-term-green'}>{label}</span>
       </div>
@@ -645,9 +646,9 @@ function PermCard({
       data-testid="live-perm"
       className="border-term-warning px-sm py-xs flex flex-col gap-1 border"
     >
-      <div className="text-term-warning font-bold">{perm.title}</div>
+      <div className="text-term-warning font-semibold">{perm.title}</div>
       <div className="pl-[2ch] [overflow-wrap:anywhere] whitespace-pre-wrap">{perm.arg}</div>
-      {perm.why ? <div className="text-term-fg-muted pl-[2ch] text-xs">{perm.why}</div> : null}
+      {perm.why ? <div className="text-term-fg-muted text-caption pl-[2ch]">{perm.why}</div> : null}
       <div className="mt-1">Do you want to proceed?</div>
       {answerable ? (
         opts.map((o, k) => (
@@ -661,7 +662,7 @@ function PermCard({
           </button>
         ))
       ) : (
-        <div className="text-term-fg-muted pl-[2ch] text-xs" role="status">
+        <div className="text-term-fg-muted text-caption pl-[2ch]" role="status">
           Waiting for Mainloop to record the request…
         </div>
       )}
@@ -880,7 +881,7 @@ function Composer({
                 )}
               >
                 <span>{c.name}</span>
-                <span className="text-term-fg-muted truncate text-xs">{c.description}</span>
+                <span className="text-term-fg-muted text-caption truncate">{c.description}</span>
               </button>
             ))}
           </div>
@@ -911,7 +912,7 @@ function Composer({
                     : 'Message, or / for commands'
             }
             aria-label="Message"
-            className="placeholder:text-term-fg-muted max-h-[9em] min-w-0 flex-1 resize-none bg-transparent py-1 text-base leading-snug outline-none lg:text-sm"
+            className="placeholder:text-term-fg-muted text-field max-h-[9em] min-w-0 flex-1 resize-none bg-transparent py-1 leading-snug outline-none"
           />
           <button
             type="button"
@@ -1012,16 +1013,16 @@ function ControlsPicker({
             >
               <span>{m === cur ? '❯' : ''}</span>
               <span>{m.displayName || m.value}</span>
-              <span className="text-term-fg-muted text-xs">{m.value}</span>
+              <span className="text-term-fg-muted text-caption">{m.value}</span>
               {m.description ? (
-                <span className="text-term-fg-muted col-span-2 col-start-2 text-xs">
+                <span className="text-term-fg-muted text-caption col-span-2 col-start-2">
                   {m.description}
                 </span>
               ) : null}
             </button>
           ))
         ) : (
-          <p className="text-term-fg-muted text-xs">No model list yet.</p>
+          <p className="text-term-fg-muted text-caption">No model list yet.</p>
         )}
       </div>
       <ControlsHeading>Effort</ControlsHeading>
@@ -1042,7 +1043,7 @@ function ControlsPicker({
               close();
             }}
             className={cn(
-              'border-border-subtle hover:bg-accent min-h-control border-l text-xs first:border-l-0',
+              'border-border-subtle hover:bg-accent min-h-control text-caption border-l first:border-l-0',
               state.effort === x && 'bg-term-selection'
             )}
           >

@@ -33,7 +33,7 @@ export function SessionBar({
   return (
     <div
       className={cn(
-        'border-border-subtle bg-card text-muted-foreground shrink-0 border-b text-xs',
+        'border-border-subtle bg-card text-muted-foreground text-caption shrink-0 border-b',
         className
       )}
       data-testid={testId}

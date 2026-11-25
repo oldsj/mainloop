@@ -9,7 +9,7 @@ The environment section on a project page. The owner chooses which statically va
 ## Tokens
 
 - Section `border-border`, padding `p-md`, gap `gap-md`, radius `rounded-none`.
-- Heading `text-lg font-medium`. Saved and draft lines `text-sm`. Labels and explanations `text-muted-foreground`.
+- Heading `text-title font-semibold`. Saved and draft lines `text-body`. Labels and explanations `text-muted-foreground`.
 - Warning for the accepted default `text-term-yellow`. Save error `text-destructive`.
 - Selects and the image input `border-border bg-background`. Save and register are primary buttons. Accept is an outline button.
 

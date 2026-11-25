@@ -17,7 +17,7 @@ export function ComposerFooter({
 }) {
   return (
     <div
-      className="text-term-fg-muted gap-x-sm flex min-w-0 flex-wrap items-center text-xs"
+      className="text-term-fg-muted gap-x-sm text-caption flex min-w-0 flex-wrap items-center font-mono"
       data-testid="composer-footer"
     >
       {controls}

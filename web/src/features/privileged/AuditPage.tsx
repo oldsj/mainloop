@@ -21,7 +21,7 @@ const TONE = {
 
 function StateLabel({ state }: { state: PrivilegedActionState }) {
   const s = STATE[state];
-  return <span className={cn('flex-none text-xs font-medium', TONE[s.tone])}>{s.label}</span>;
+  return <span className={cn('text-caption flex-none font-medium', TONE[s.tone])}>{s.label}</span>;
 }
 
 /**
@@ -42,7 +42,7 @@ export function PrivilegedAuditPage() {
         }
       />
       {actions.isPending ? (
-        <p role="status" className="text-muted-foreground text-sm">
+        <p role="status" className="text-muted-foreground text-body">
           Loading…
         </p>
       ) : actions.isError ? (
@@ -53,7 +53,9 @@ export function PrivilegedAuditPage() {
           pending={actions.isFetching}
         />
       ) : actions.data.length === 0 ? (
-        <p className="text-muted-foreground text-sm">No agent has asked for a privileged action.</p>
+        <p className="text-muted-foreground text-body">
+          No agent has asked for a privileged action.
+        </p>
       ) : (
         <ol className="gap-sm flex flex-col" aria-label="Privileged actions">
           {actions.data.map((a) => (
@@ -74,14 +76,14 @@ function Row({ action: a }: { action: PrivilegedActionSummary }) {
         className="gap-xs hover:bg-muted p-xs flex flex-col"
       >
         <span className="gap-sm flex min-w-0 items-baseline">
-          <span className="min-w-0 flex-1 truncate text-sm font-medium">{a.title}</span>
+          <span className="text-body min-w-0 flex-1 truncate font-medium">{a.title}</span>
           <StateLabel state={a.state} />
         </span>
-        <span className="text-muted-foreground text-xs">
+        <span className="text-muted-foreground text-caption">
           {requester(a)} · {messageTime(a.created_at)}
         </span>
         {(a.last_error ?? a.decision_note) ? (
-          <span className="text-muted-foreground text-xs [overflow-wrap:anywhere]">
+          <span className="text-muted-foreground text-caption [overflow-wrap:anywhere]">
             {a.last_error ?? a.decision_note}
           </span>
         ) : null}
@@ -104,7 +106,7 @@ export function PrivilegedActionPage({ id }: { id: string }) {
         }
       />
       {action.isPending ? (
-        <p role="status" className="text-muted-foreground text-sm">
+        <p role="status" className="text-muted-foreground text-body">
           Loading…
         </p>
       ) : action.isError ? (
@@ -144,7 +146,7 @@ function Detail({ d }: { d: NonNullable<ReturnType<typeof usePrivilegedAction>['
   ];
   return (
     <>
-      <dl className="gap-x-md gap-y-xs grid grid-cols-[auto_1fr] text-sm">
+      <dl className="gap-x-md gap-y-xs text-body grid grid-cols-[auto_1fr]">
         {facts
           .filter(([, v]) => v)
           .map(([k, v]) => (
@@ -155,18 +157,20 @@ function Detail({ d }: { d: NonNullable<ReturnType<typeof usePrivilegedAction>['
           ))}
       </dl>
       <section className="gap-xs flex flex-col" aria-label="Agent's reason">
-        <h2 className="text-sm font-medium">Agent&apos;s reason (its claim)</h2>
-        <p className="text-sm [overflow-wrap:anywhere] whitespace-pre-wrap">{a.reason}</p>
+        <h2 className="text-body font-medium">Agent&apos;s reason (its claim)</h2>
+        <p className="text-body [overflow-wrap:anywhere] whitespace-pre-wrap">{a.reason}</p>
       </section>
       {d.body ? (
         <section className="gap-xs flex flex-col" aria-label="What was approved">
-          <h2 className="text-sm font-medium">The card</h2>
-          <p className="text-xs [overflow-wrap:anywhere] whitespace-pre-wrap">{d.body}</p>
+          <h2 className="text-body font-medium">The card</h2>
+          <p className="text-caption font-mono [overflow-wrap:anywhere] whitespace-pre-wrap">
+            {d.body}
+          </p>
         </section>
       ) : null}
       <section className="gap-xs flex flex-col" aria-label="Steps">
-        <h2 className="text-sm font-medium">Steps</h2>
-        <ol className="gap-xs flex flex-col text-xs">
+        <h2 className="text-body font-medium">Steps</h2>
+        <ol className="gap-xs text-caption flex flex-col">
           {d.events.map((e) => (
             <li key={e.id} className="gap-sm flex">
               <span className="text-muted-foreground flex-none">{messageTime(e.created_at)}</span>

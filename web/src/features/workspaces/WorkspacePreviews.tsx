@@ -22,10 +22,10 @@ export function WorkspacePreviews({ workspaceId }: { workspaceId: string }) {
 
   return (
     <section aria-labelledby="previews-heading" className="gap-sm flex flex-col">
-      <h2 id="previews-heading" className="text-base font-medium">
+      <h2 id="previews-heading" className="text-title font-semibold">
         Previews
       </h2>
-      <p className="text-muted-foreground text-sm">
+      <p className="text-muted-foreground text-body">
         Open a declared HTTP port in a new tab. A sleeping workspace wakes when you open it; a dev
         server has to be started again after a wake.
       </p>
@@ -40,13 +40,13 @@ export function WorkspacePreviews({ workspaceId }: { workspaceId: string }) {
       ) : null}
 
       {list === null && !reason ? (
-        <p role="status" className="text-muted-foreground text-sm">
+        <p role="status" className="text-muted-foreground text-body">
           Loading previews…
         </p>
       ) : null}
 
       {list !== null && links.length === 0 && dropped === 0 ? (
-        <p className="text-muted-foreground text-sm">No preview ports are declared.</p>
+        <p className="text-muted-foreground text-body">No preview ports are declared.</p>
       ) : null}
 
       {links.length > 0 ? (
@@ -56,16 +56,16 @@ export function WorkspacePreviews({ workspaceId }: { workspaceId: string }) {
               key={`${link.port}-${link.url}`}
               className="gap-md border-border-subtle py-sm flex flex-wrap items-center justify-between border-b"
             >
-              <span className="min-w-0 text-sm break-words">
+              <span className="text-body min-w-0 break-words">
                 {link.name}
-                <span className="text-muted-foreground">:{link.port}</span>
+                <span className="text-muted-foreground font-mono">:{link.port}</span>
               </span>
               <a
                 href={link.url}
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label={`Open preview ${link.name}, port ${link.port}`}
-                className="text-foreground min-h-control inline-flex items-center text-sm underline"
+                className="text-foreground min-h-control text-body inline-flex items-center underline"
               >
                 Open preview
               </a>
@@ -75,7 +75,7 @@ export function WorkspacePreviews({ workspaceId }: { workspaceId: string }) {
       ) : null}
 
       {dropped > 0 ? (
-        <p role="status" className="text-muted-foreground text-xs">
+        <p role="status" className="text-muted-foreground text-caption">
           {dropped === 1
             ? 'One preview could not be read and is not listed.'
             : `${dropped} previews could not be read and are not listed.`}

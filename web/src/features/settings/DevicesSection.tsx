@@ -75,10 +75,10 @@ export function DevicesSection() {
   return (
     <section aria-labelledby="devices-heading" className="gap-md flex flex-col">
       <div className="gap-xs flex flex-col">
-        <h2 id="devices-heading" className="text-base font-semibold">
+        <h2 id="devices-heading" className="text-title font-semibold">
           Devices
         </h2>
-        <p className="text-muted-foreground max-w-measure text-sm">
+        <p className="text-muted-foreground max-w-measure text-body">
           Phones that call Mainloop as you, each with a key that never leaves it. Revoke one you do
           not recognise or no longer use: its key stops working on its next request.
         </p>
@@ -92,11 +92,11 @@ export function DevicesSection() {
           onRetry={() => void devices.refetch()}
         />
       ) : devices.data === undefined ? (
-        <p role="status" className="text-muted-foreground text-sm">
+        <p role="status" className="text-muted-foreground text-body">
           Loading devices…
         </p>
       ) : devices.data.length === 0 ? (
-        <p className="text-muted-foreground text-sm">
+        <p className="text-muted-foreground text-body">
           No devices registered. Sign in from the iPhone app’s Settings to register one.
         </p>
       ) : (
@@ -116,7 +116,7 @@ export function DevicesSection() {
             ))}
           </ul>
           {devices.data.length >= DEVICE_LIMIT ? (
-            <p className="text-muted-foreground text-xs">
+            <p className="text-muted-foreground text-caption">
               Showing the newest {DEVICE_LIMIT} devices.
             </p>
           ) : null}
@@ -160,14 +160,16 @@ function DeviceRow({
   ].filter((fact): fact is string => fact !== null);
 
   return (
-    <li className="gap-xs p-sm flex flex-col text-sm" data-testid="device">
+    <li className="gap-xs p-sm text-body flex flex-col" data-testid="device">
       <div className="gap-sm flex flex-wrap items-center">
         <p className="font-medium break-words">{device.name}</p>
-        {device.current ? <span className="text-muted-foreground text-xs">this device</span> : null}
+        {device.current ? (
+          <span className="text-muted-foreground text-caption">this device</span>
+        ) : null}
         <StatusBadge label={revokedAt ? 'Revoked' : 'Active'} tone={revokedAt ? 'muted' : 'ok'} />
       </div>
-      <p className="text-muted-foreground text-xs">{facts.join(' · ')}</p>
-      <p className="text-muted-foreground text-xs break-all">
+      <p className="text-muted-foreground text-caption">{facts.join(' · ')}</p>
+      <p className="text-muted-foreground text-caption break-all">
         {device.id} · key{' '}
         <span title={device.key_thumbprint}>{shortThumbprint(device.key_thumbprint)}</span>
         {device.approval_key ? (
@@ -182,7 +184,7 @@ function DeviceRow({
         )}
       </p>
       {revokedAt || pin === null ? null : (
-        <details className="text-xs">
+        <details className="text-caption">
           <summary className="text-muted-foreground cursor-pointer">
             Pin its approval key for the executor
           </summary>
@@ -210,7 +212,7 @@ function DeviceRow({
         </div>
       )}
       {error ? (
-        <p role="alert" className="text-destructive text-xs">
+        <p role="alert" className="text-destructive text-caption">
           {error}
         </p>
       ) : null}

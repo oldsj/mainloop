@@ -178,7 +178,7 @@ function PaletteBody({
             setPicked(0);
           }}
           onKeyDown={onKeyDown}
-          className="placeholder:text-muted-foreground text-ui h-11 min-w-0 flex-1 bg-transparent outline-none"
+          className="placeholder:text-muted-foreground text-field h-11 min-w-0 flex-1 bg-transparent outline-none"
         />
       </div>
       <ul
@@ -200,26 +200,26 @@ function PaletteBody({
             onMouseMove={() => setPicked(index)}
             onClick={() => run(item)}
             className={cn(
-              'gap-sm px-sm min-h-control text-ui flex cursor-default items-center',
+              'gap-sm px-sm min-h-control text-body flex cursor-default items-center',
               index === active && 'bg-accent text-accent-foreground'
             )}
           >
             <span className="min-w-0 flex-none basis-auto truncate">{item.label}</span>
-            <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
+            <span className="text-muted-foreground text-caption min-w-0 flex-1 truncate">
               {item.detail}
             </span>
-            <span className="text-muted-foreground text-2xs shrink-0 tracking-wide uppercase">
+            <span className="text-muted-foreground text-label shrink-0 tracking-wide uppercase">
               {item.kind}
             </span>
           </li>
         ))}
       </ul>
       {shown.length === 0 ? (
-        <p role="status" className="text-muted-foreground p-md text-sm">
+        <p role="status" className="text-muted-foreground p-md text-body">
           Nothing to show yet.
         </p>
       ) : null}
-      <p className="text-muted-foreground border-border-subtle px-sm text-2xs gap-md hidden border-t py-1 lg:flex">
+      <p className="text-muted-foreground border-border-subtle px-sm text-label gap-md hidden border-t py-1 lg:flex">
         <span>↑↓ move</span>
         <span>Enter open</span>
         <span>{isApplePlatform() ? '⌘' : 'Ctrl+'}Enter ask Mainloop about it</span>

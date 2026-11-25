@@ -56,11 +56,11 @@ export function MessageBubble({
         )}
       >
         <details data-testid="assignment-block">
-          <summary className="text-muted-foreground min-h-control cursor-pointer text-xs md:text-sm">
+          <summary className="text-muted-foreground min-h-control text-caption cursor-pointer">
             Assignment from Mainloop · {messageTime(message.created_at)}
           </summary>
           <div className="mt-xs min-w-0">
-            <Markdown className="text-foreground text-sm md:text-base">{content}</Markdown>
+            <Markdown className="text-foreground text-body">{content}</Markdown>
           </div>
         </details>
         {notice ? (
@@ -91,7 +91,7 @@ export function MessageBubble({
       <div className="gap-xs flex flex-col">
         <span
           className={cn(
-            'shrink-0 text-xs md:text-sm',
+            'text-caption shrink-0',
             report ? 'text-muted-foreground' : isUser ? 'text-term-accent-alt' : 'text-term-accent'
           )}
         >
@@ -108,10 +108,7 @@ export function MessageBubble({
         </span>
         <div className="min-w-0 flex-1">
           <Markdown
-            className={cn(
-              'text-sm md:text-base',
-              queued ? 'text-muted-foreground' : 'text-foreground'
-            )}
+            className={cn('text-body', queued ? 'text-muted-foreground' : 'text-foreground')}
           >
             {report ? report.body : content}
           </Markdown>
@@ -129,7 +126,7 @@ export function MessageBubble({
             </div>
           ) : null}
           {stopped ? (
-            <p className="mt-sm text-muted-foreground text-sm" data-testid="turn-stopped-note">
+            <p className="mt-sm text-muted-foreground text-body" data-testid="turn-stopped-note">
               {STOPPED_NOTE}
             </p>
           ) : null}
@@ -140,7 +137,10 @@ export function MessageBubble({
               onRetry={onRetry ? () => onRetry(message) : undefined}
             />
           ) : null}
-          <time dateTime={message.created_at} className="text-muted-foreground mt-xs block text-xs">
+          <time
+            dateTime={message.created_at}
+            className="text-muted-foreground mt-xs text-caption block"
+          >
             {messageTime(message.created_at)}
           </time>
         </div>

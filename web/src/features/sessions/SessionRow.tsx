@@ -64,14 +64,14 @@ export function SessionRow({ session, workspace, providers, taskTitle }: Session
               aria-hidden="true"
             />
           ) : null}
-          <h3 className="truncate text-sm font-medium group-aria-[current=page]:font-bold">
+          <h3 className="text-body truncate font-medium group-aria-[current=page]:font-semibold">
             {session.parent_session_id ? <span data-testid="child-marker">↳ </span> : null}
             {name}
           </h3>
           {session.topic ? (
             <span
               data-testid="session-topic"
-              className={`text-muted-foreground shrink-0 text-xs ${ON_FILL}`}
+              className={`text-muted-foreground text-caption shrink-0 ${ON_FILL}`}
             >
               #{session.topic}
             </span>
@@ -79,7 +79,7 @@ export function SessionRow({ session, workspace, providers, taskTitle }: Session
         </div>
         <time
           dateTime={session.created_at}
-          className={`text-muted-foreground shrink-0 text-xs ${ON_FILL}`}
+          className={`text-muted-foreground text-caption shrink-0 ${ON_FILL}`}
         >
           {relativeTime(session.created_at)}
         </time>
@@ -92,19 +92,22 @@ export function SessionRow({ session, workspace, providers, taskTitle }: Session
             tone={sessionTone(session)}
             className={ON_FILL}
           />
-          <span data-testid="session-kind" className={`text-muted-foreground text-xs ${ON_FILL}`}>
+          <span
+            data-testid="session-kind"
+            className={`text-muted-foreground text-caption ${ON_FILL}`}
+          >
             {kind}
           </span>
           {workspace ? <WorkspaceLifecycleBadge workspace={workspace} className={ON_FILL} /> : null}
         </div>
         {repo ? (
-          <span className={`text-muted-foreground truncate text-xs ${ON_FILL}`}>{repo}</span>
+          <span className={`text-muted-foreground text-caption truncate ${ON_FILL}`}>{repo}</span>
         ) : null}
       </div>
 
       {session.error ? (
         <div
-          className={`text-destructive truncate text-xs ${ON_FILL}`}
+          className={`text-destructive text-caption truncate ${ON_FILL}`}
         >{`Error: ${session.error}`}</div>
       ) : null}
     </Link>

@@ -79,12 +79,12 @@ export function NewAgentPage() {
       <PageHeader title="New agent session" />
 
       <fieldset className="gap-xs flex flex-col">
-        <legend className="text-sm font-medium">Agent</legend>
+        <legend className="text-body font-medium">Agent</legend>
         <div className="gap-sm flex">
           {KINDS.map((option) => (
             <label
               key={option.value}
-              className="gap-xs px-md border-border has-checked:bg-accent has-checked:text-accent-foreground min-h-control flex cursor-pointer items-center border text-sm"
+              className="gap-xs px-md border-border has-checked:bg-accent has-checked:text-accent-foreground min-h-control text-body flex cursor-pointer items-center border"
             >
               <input
                 type="radio"
@@ -101,17 +101,17 @@ export function NewAgentPage() {
         </div>
       </fieldset>
 
-      <label className="gap-xs flex flex-col text-sm">
+      <label className="gap-xs text-body flex flex-col">
         Title
         <input
           data-testid="agent-title"
           value={title}
           onChange={(event) => setTitleOverride(event.target.value)}
-          className="border-border bg-background text-foreground px-md min-h-control w-full border text-sm"
+          className="border-border bg-background text-foreground px-md min-h-control text-field w-full border"
         />
       </label>
 
-      <label className="gap-xs flex flex-col text-sm">
+      <label className="gap-xs text-body flex flex-col">
         First prompt
         <textarea
           data-testid="agent-prompt"
@@ -119,17 +119,17 @@ export function NewAgentPage() {
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
           onKeyDown={onPromptKeyDown}
-          className="border-border bg-background text-foreground px-md py-sm w-full border text-sm"
+          className="border-border bg-background text-foreground px-md py-sm text-field w-full border"
         />
       </label>
 
       {offline ? (
-        <p className="text-term-yellow text-sm">
+        <p className="text-term-yellow text-body">
           {"Backend unreachable: can't start a session right now."}
         </p>
       ) : null}
       {failure ? (
-        <p role="alert" className="text-destructive text-sm">
+        <p role="alert" className="text-destructive text-body">
           {failure}
         </p>
       ) : null}

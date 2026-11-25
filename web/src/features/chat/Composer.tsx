@@ -386,7 +386,7 @@ export function Composer({
         ) : null}
         {imageError ? (
           <p
-            className="text-destructive px-md pt-xs text-xs"
+            className="text-destructive px-md pt-xs text-caption"
             role="alert"
             data-testid="composer-image-error"
           >
@@ -406,7 +406,7 @@ export function Composer({
               role="listbox"
               aria-label="Slash commands"
               data-testid="slash-command-menu"
-              className="border-border bg-popover text-popover-foreground absolute inset-x-0 bottom-full z-10 mb-1 max-h-48 overflow-auto border text-sm shadow-md"
+              className="border-border bg-popover text-popover-foreground text-body absolute inset-x-0 bottom-full z-10 mb-1 max-h-48 overflow-auto border shadow-md"
             >
               {matches.map((command, index) => (
                 <li
@@ -468,7 +468,7 @@ export function Composer({
               onKeyDown={keyDown}
               onPaste={paste}
               data-testid="command-input"
-              className="text-foreground placeholder:text-muted-foreground max-h-[9em] min-w-0 flex-1 resize-none bg-transparent py-1 text-base leading-snug outline-none lg:text-sm"
+              className="text-foreground placeholder:text-muted-foreground text-field max-h-[9em] min-w-0 flex-1 resize-none bg-transparent py-1 leading-snug outline-none"
             />
             <button
               type="button"
@@ -482,7 +482,7 @@ export function Composer({
             </button>
           </div>
           {controls || modelEffort ? (
-            <div className="text-muted-foreground gap-sm flex min-w-0 items-center text-xs">
+            <div className="text-muted-foreground gap-sm text-caption flex min-w-0 items-center font-mono">
               {controls}
               {modelEffort ? (
                 <p className="min-w-0 truncate" data-testid="composer-model-effort">

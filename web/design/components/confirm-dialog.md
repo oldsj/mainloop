@@ -11,7 +11,7 @@ A two-step confirmation for an action that cannot be undone or that costs someth
 - Panel `bg-background`, text `text-foreground`, border `border-border`, radius `rounded-none`, padding `p-lg`.
 - Overlay `bg-background/80`.
 - The destructive confirm uses the destructive token. The plain confirm uses the primary token.
-- Description `text-muted-foreground`; title `text-lg` medium.
+- Description `text-muted-foreground`; title `text-title` semibold.
 
 ## States
 

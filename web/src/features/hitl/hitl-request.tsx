@@ -39,7 +39,8 @@ export interface HITLRequestProps {
 }
 
 const link = 'text-primary inline-flex min-h-control items-center underline underline-offset-4';
-const field = 'border-input bg-background text-foreground p-sm w-full rounded-none border text-sm';
+const field =
+  'border-input bg-background text-foreground p-sm w-full rounded-none border text-field';
 const choiceBase = 'aria-pressed:border-foreground';
 const approveChoice = cn(
   choiceBase,
@@ -406,7 +407,7 @@ export function HITLRequest({
   return (
     <section
       aria-label="Session input"
-      className="gap-sm p-md text-foreground grid text-sm break-words"
+      className="gap-sm p-md text-foreground text-body grid break-words"
     >
       <header className="gap-xs grid">
         <h3 ref={headingRef} tabIndex={-1} className="font-medium focus:outline-none">

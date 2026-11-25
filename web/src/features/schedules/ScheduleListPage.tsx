@@ -25,7 +25,7 @@ export function ScheduleListPage() {
         }
       />
 
-      {schedules.isPending ? <p className="text-sm">Loading schedules…</p> : null}
+      {schedules.isPending ? <p className="text-body">Loading schedules…</p> : null}
 
       {schedules.isError && items.length === 0 ? (
         <ErrorRecovery
@@ -38,8 +38,8 @@ export function ScheduleListPage() {
 
       {schedules.isSuccess && items.length === 0 ? (
         <div className="border-border p-lg gap-sm flex flex-col border">
-          <p className="text-sm font-medium">No schedules yet.</p>
-          <p className="text-muted-foreground text-sm">
+          <p className="text-body font-medium">No schedules yet.</p>
+          <p className="text-muted-foreground text-body">
             Create one to run an agent on a fixed timetable.
           </p>
         </div>
