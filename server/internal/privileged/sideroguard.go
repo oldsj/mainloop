@@ -25,8 +25,10 @@ const (
 	cosiResourceDefinitions = "ResourceDefinitions.meta.cosi.dev"
 	omniClusterMachineIDs   = "ClusterMachineIdentities.omni.sidero.dev"
 	omniDefaultNamespace    = "default"
-	methodMachineLogs       = "/management.ManagementService/MachineLogs"
 	methodUpgrade           = "/machine.MachineService/Upgrade"
+	// talosctl upgrade on Talos 1.13 and later pulls the image, then installs it, then reboots.
+	methodImagePull        = "/machine.ImageService/Pull"
+	methodLifecycleUpgrade = "/machine.LifecycleService/Upgrade"
 	// ResourceDefinitionSpec's sensitivity field, and its SENSITIVE value.
 	rdSensitivityField = 7
 	rdSensitive        = 1
@@ -46,28 +48,34 @@ func (p *sideroProxy) check(ctx context.Context, method string, md metadata.MD, 
 	switch {
 	case strings.HasPrefix(method, cosiState):
 		return p.checkState(ctx, strings.TrimPrefix(method, cosiState), md, req)
-	case method == methodMachineLogs:
-		id, err := protoField(req, 1)
+	case method == methodUpgrade, method == methodImagePull, method == methodLifecycleUpgrade:
+		image, err := upgradeImage(method, req)
 		if err != nil {
 			return refusedBy("%s: %v", method, err)
 		}
-		m, err := p.machines(ctx)
-		if err != nil {
-			return err
-		}
-		if !m.ids[string(id)] {
-			return refusedBy("machine %q is not in a cluster the executor acts on (%s)", id, strings.Join(p.clusters, ", "))
-		}
-	case method == methodUpgrade:
-		image, err := protoField(req, 1)
-		if err != nil {
-			return refusedBy("%s: %v", method, err)
-		}
-		if len(image) > 0 && !talosImage(string(image)) {
+		// The legacy Upgrade with no image installs the node's own default; the others need one.
+		if (len(image) > 0 || method != methodUpgrade) && !talosImage(string(image)) {
 			return refusedBy("the upgrade image is not from factory.talos.dev or ghcr.io/siderolabs")
 		}
 	}
 	return nil
+}
+
+// upgradeImage is the image an upgrade call installs: machine.UpgradeRequest.image (1),
+// ImageServicePullRequest.image_ref (3), or LifecycleServiceUpgradeRequest.source (2)
+// .image_name (1).
+func upgradeImage(method string, req []byte) ([]byte, error) {
+	switch method {
+	case methodImagePull:
+		return protoField(req, 3)
+	case methodLifecycleUpgrade:
+		source, err := protoField(req, 2)
+		if err != nil || source == nil {
+			return nil, err
+		}
+		return protoField(source, 1)
+	}
+	return protoField(req, 1)
 }
 
 func (p *sideroProxy) checkState(ctx context.Context, call string, md metadata.MD, req []byte) error {

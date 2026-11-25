@@ -10,7 +10,9 @@ import (
 // or one the executor's authors did not think of, is refused until it is read and added here. Each
 // holds state an operator reads to see how a cluster is doing, and none holds a credential. Left
 // out on purpose, among others: Omni's ConfigPatches, Configs, cluster and machine configs (even
-// redacted), join tokens, kubeconfigs, talosconfigs and secrets; Talos's machine config, LinkSpecs,
+// redacted, and MachinePendingUpdates's config diff), join tokens, kubeconfigs, talosconfigs and secrets; MachineStatuses, KernelArgs and
+// KernelArgsStatuses, which hold a machine's kernel command line, where Omni's installation media
+// put the SideroLink join token (siderolink.api=...?jointoken=); Talos's machine config, LinkSpecs,
 // RegistryConfigs, Manifests, KubeSpan and discovery configs, VolumeConfigs, extension service
 // configs and the Siderolink config. The executor's proxy also asks the server for each type's
 // resource definition and refuses one marked sensitive, and refuses the names secretType matches,
@@ -22,9 +24,9 @@ var (
 		"ClusterMachineTalosVersions", "ClusterKubernetesManifestsStatuses",
 		"ControlPlaneStatuses", "KubernetesStatuses", "KubernetesUpgradeStatuses", "KubernetesUpgradeManifestStatuses",
 		"KubernetesVersions", "TalosVersions", "TalosUpgradeStatuses", "MachineSets", "MachineSetStatuses", "MachineSetNodes",
-		"MachineSetDestroyStatuses", "Machines", "MachineStatuses", "MachineLabels", "MachineClasses", "MachineExtensions",
-		"MachineExtensionsStatuses", "MachineUpgradeStatuses", "MachinePendingUpdates", "EtcdBackups", "EtcdBackupStatuses",
-		"EtcdBackupOverallStatuses", "ExposedServices", "OngoingTasks", "Notifications", "KernelArgs", "KernelArgsStatuses",
+		"MachineSetDestroyStatuses", "Machines", "MachineLabels", "MachineClasses", "MachineExtensions",
+		"MachineExtensionsStatuses", "MachineUpgradeStatuses", "EtcdBackups", "EtcdBackupStatuses",
+		"EtcdBackupOverallStatuses", "ExposedServices", "OngoingTasks", "Notifications",
 		"LoadBalancerStatuses", "ImagePullStatuses",
 	)
 	talosReadable = slices.Concat(
