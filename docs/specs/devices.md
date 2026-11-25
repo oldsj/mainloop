@@ -120,31 +120,41 @@ The iPhone app shows the web app itself in a web view ([iOS app](ios-app.md)). A
 sign each request with the device key, so the app trades one signed request for a web session:
 
 - `POST /devices/current/web-session`, signed by the device key, answers `201` with
-  `cookie_name` (`mainloop-device`), a `token` (32 random bytes, base64url) and `expires_at`, 12
-  hours on. Only a request the device key signed starts one. A web session can't start another, so
-  a page can't extend its own; neither can a Pocket ID sign-in (`403`). The token is returned once.
-  The server keeps only its SHA-256 (`device_web_sessions`), and expired rows are pruned.
-- The app sets the token as an HttpOnly, Secure, SameSite=Strict cookie in a web view store that
-  keeps nothing on disk, so the page's scripts can't read it. It starts a new session at launch,
-  before the current one runs out, and when the page reports a `401`.
+  `cookie_name` (`__Host-mainloop-device`), a `token` (32 random bytes, base64url) and
+  `expires_at`, an hour on. Only a request the device key signed starts one: not a web session, so
+  a page can't extend its own, and not a Pocket ID sign-in (`403`). A device has one session at a
+  time: a new one ends its earlier ones. The token is returned once. The server keeps only its
+  SHA-256 (`device_web_sessions`), and expired rows are pruned.
+- `DELETE /devices/current/web-session`, signed by the device key, ends the device's sessions
+  (`204`). Revoking the device, which signing out does, ends them too.
+- The app sets the token as an HttpOnly, Secure, host-only cookie on path `/`, so the page's
+  scripts can't read it. The `__Host-` prefix makes a browser refuse such a cookie from any other
+  host, so a page on a sibling host (a workspace preview) can't plant one. The app starts a new
+  session each time it comes to the foreground, before the current one runs out, and when the page
+  reports a `401`.
 - A request with the cookie acts as the device (via `session`): the owner's scope, the write checks
   of [authentication](authentication.md#owner-writes) (the page sends `X-Mainloop-Client: web` and
   the app's own `Origin`), and every device limit. It can't register a device, answer a device
-  registration, revoke another device, start a web session, or approve a privileged action without
-  the phone's Touch ID signature (the page asks the app for that; see [iOS app](ios-app.md)).
-- Revoking the device ends its sessions on the next request, and its open streams as above. Expiry
-  is checked when a request starts: a stream opened before it stays open until it closes or the
-  device is revoked.
+  registration, revoke another device, start or end a web session, set or clear the device's push
+  token, or approve a privileged action without the phone's Touch ID signature (the page asks the
+  app for that; see [iOS app](ios-app.md)).
+- A stream the session holds open (the event stream, a live session) ends when the session
+  expires, and when it is replaced or ended: at once in the process that ended it, and in other
+  replicas within 15 seconds. Revoking the device ends it as above.
 
 ## Managing devices
 
-| Operation                      | Who                                                                                            |
-| ------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `GET /devices`                 | the owner and devices: newest first, revoked ones included; `current` marks the calling device |
-| `GET /devices/current`         | a device: itself; `404` for anyone else                                                        |
-| `DELETE /devices/{device_id}`  | the owner, any device; a device, only itself (signing out). Idempotent                         |
-| `PUT /devices/current/push`    | a device: sets its APNs token ([push notifications](push-notifications.md#apple-push-apns))    |
-| `DELETE /devices/current/push` | a device: clears its APNs token. Idempotent                                                    |
+| Operation                             | Who                                                                                            |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `GET /devices`                        | the owner and devices: newest first, revoked ones included; `current` marks the calling device |
+| `GET /devices/current`                | a device: itself; `404` for anyone else                                                        |
+| `DELETE /devices/{device_id}`         | the owner, any device; a device, only itself (signing out). Idempotent                         |
+| `PUT /devices/current/push`           | a signed device request: sets its APNs token ([push](push-notifications.md#apple-push-apns))   |
+| `DELETE /devices/current/push`        | a signed device request: clears its APNs token. Idempotent                                     |
+| `POST /devices/current/web-session`   | a signed device request: starts its web session ([above](#the-apps-web-view))                  |
+| `DELETE /devices/current/web-session` | a signed device request: ends its web sessions. Idempotent                                     |
+
+A device's web session can't call the four `current` writes: they are the app's own business.
 
 Revoking stops the device's key at once and keeps the row for the audit. A revoked device can't be
 brought back, and a device's key and identity can't change (a database trigger refuses both).

@@ -32,6 +32,10 @@ INSERT INTO device_token_uses (device_id, jti, expires_at) VALUES ($1, $2, $3) O
 -- A used token past its expiry is refused for that reason alone.
 DELETE FROM device_token_uses WHERE expires_at < now();
 
+-- name: EndDeviceWebSessions :execrows
+-- Ends every web session of a device: before a new one starts, when it signs out, when it is revoked.
+DELETE FROM device_web_sessions WHERE device_id = $1;
+
 -- name: InsertDeviceWebSession :exec
 INSERT INTO device_web_sessions (token_hash, device_id, expires_at) VALUES ($1, $2, $3);
 

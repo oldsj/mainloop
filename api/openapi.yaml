@@ -360,8 +360,9 @@ paths:
         Starts a web session for the device that signed this request (docs/specs/devices.md, "The app's web
         view"). The iPhone app shows the web app in a web view, which can't sign its requests; it sets the
         returned token as the HttpOnly cookie `cookie_name`, and every request carrying it acts as this
-        device until `expires_at` or the device is revoked. Only a request the device key signed starts one,
-        never a web session or a sign-in. The token is returned once; the server keeps only its SHA-256.
+        device until `expires_at` (an hour on), the session is replaced or ended, or the device is revoked.
+        A new session ends the device's earlier ones. Only a request the device key signed starts one, never
+        a web session or a sign-in. The token is returned once; the server keeps only its SHA-256.
       operationId: createDeviceWebSession
       responses:
         '201':
@@ -378,6 +379,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+    delete:
+      tags:
+        - devices
+      summary: End Device Web Sessions
+      description: >-
+        Ends every web session of the device that signed this request, and the streams they hold open. Only a
+        request the device key signed may call it, never a web session.
+      operationId: endDeviceWebSessions
+      responses:
+        '204':
+          description: Ended (also when there were none)
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
   /devices/current/push:
     put:
       tags:
@@ -385,7 +405,8 @@ paths:
       summary: Set Device Push Token
       description: >-
         Sets the APNs device token of the device that signed this request (docs/specs/push-notifications.md).
-        Replaces any token it had; a token another device had moves to this one. Only a device may call it.
+        Replaces any token it had; a token another device had moves to this one. Only a request the device key
+        signed may call it, never the device's web session.
       operationId: setDevicePush
       requestBody:
         required: true
@@ -424,7 +445,9 @@ paths:
       tags:
         - devices
       summary: Clear Device Push Token
-      description: Stops pushes to the device that signed this request. Clearing a device with no token succeeds.
+      description: >-
+        Stops pushes to the device that signed this request. Clearing a device with no token succeeds. Only a
+        request the device key signed may call it, never the device's web session.
       operationId: clearDevicePush
       responses:
         '204':

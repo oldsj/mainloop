@@ -92,6 +92,10 @@ type Principal struct {
 	// Via is "bearer", "cookie", "device" (a request the device key signed) or "session" (the
 	// device's web session, DeviceSessionCookie).
 	Via string
+	// sessionHash and sessionUntil name a web session and its expiry (Via "session" only), so its
+	// open streams end with it.
+	sessionHash  string
+	sessionUntil time.Time
 	// RegistrationOnly marks a Pocket ID token of the native app's client
 	// (MAINLOOP_AUTH_DEVICE_CLIENT_ID) and not the web audience: it may only register a device.
 	RegistrationOnly bool
@@ -219,7 +223,7 @@ func (a *Authenticator) Middleware(spec *openapi3.T) (func(http.Handler) http.Ha
 				r = r.WithContext(WithPrincipal(r.Context(), *p))
 				if p.Kind == KindDevice && a.Devices != nil {
 					// A revoked device's open stream ends rather than outliving it.
-					ctx, stop := a.Devices.Watch(r.Context(), p.Name)
+					ctx, stop := a.Devices.Watch(r.Context(), *p)
 					defer stop()
 					r = r.WithContext(ctx)
 				}
@@ -288,22 +292,32 @@ func (a *Authenticator) identify(r *http.Request) (*Principal, *refusal) {
 		}
 		return a.bearer(r, token)
 	}
+	var login string
+	if c, err := r.Cookie(a.Cookie); a.OIDC != nil && err == nil && c.Value != "" {
+		login = c.Value
+	}
 	if c, err := r.Cookie(DeviceSessionCookie); err == nil && c.Value != "" {
-		if a.Devices == nil {
-			return nil, unauthorized("device sessions are not accepted here")
+		p, err := a.deviceSession(r, c.Value)
+		if err == nil {
+			return p, nil
 		}
-		id, err := a.Devices.Session(r, c.Value)
-		if err != nil {
+		// A device cookie that names no live session never hides the owner's login, so a cookie
+		// planted in a browser can't lock the owner out of it.
+		if login == "" {
 			return nil, unauthorized(err.Error())
 		}
-		return &Principal{Kind: KindDevice, Name: id, Scope: ScopeOwner, Via: "session"}, nil
 	}
-	if a.OIDC != nil {
-		if c, err := r.Cookie(a.Cookie); err == nil && c.Value != "" {
-			return a.owner(r.Context(), c.Value, "cookie")
-		}
+	if login != "" {
+		return a.owner(r.Context(), login, "cookie")
 	}
 	return nil, nil
+}
+
+func (a *Authenticator) deviceSession(r *http.Request, token string) (*Principal, error) {
+	if a.Devices == nil {
+		return nil, errors.New("device sessions are not accepted here")
+	}
+	return a.Devices.Session(r, token)
 }
 
 // bearer routes a token by its unverified claims: the owner's issuer goes to the OIDC verifier, a

@@ -104,6 +104,11 @@ func (Unimplemented) DismissQueueDiagnostic(context.Context, DismissQueueDiagnos
 	return nil, apierr.NotImplemented
 }
 
+// EndDeviceWebSessions is not implemented yet.
+func (Unimplemented) EndDeviceWebSessions(context.Context, EndDeviceWebSessionsRequestObject) (EndDeviceWebSessionsResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // EnsureProjectSupervisor is not implemented yet.
 func (Unimplemented) EnsureProjectSupervisor(context.Context, EnsureProjectSupervisorRequestObject) (EnsureProjectSupervisorResponseObject, error) {
 	return nil, apierr.NotImplemented

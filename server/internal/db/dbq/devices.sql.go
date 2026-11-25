@@ -10,6 +10,19 @@ import (
 	"time"
 )
 
+const endDeviceWebSessions = `-- name: EndDeviceWebSessions :execrows
+DELETE FROM device_web_sessions WHERE device_id = $1
+`
+
+// Ends every web session of a device: before a new one starts, when it signs out, when it is revoked.
+func (q *Queries) EndDeviceWebSessions(ctx context.Context, deviceID string) (int64, error) {
+	result, err := q.db.Exec(ctx, endDeviceWebSessions, deviceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getDeviceWebSession = `-- name: GetDeviceWebSession :one
 SELECT device_id, expires_at FROM device_web_sessions WHERE token_hash = $1 AND expires_at > now()
 `

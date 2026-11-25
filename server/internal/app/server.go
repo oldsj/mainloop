@@ -173,6 +173,7 @@ func New(d Deps) *Server {
 	devicesAPI := &devices.DevicesAPI{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID}
 	if d.Auth != nil && d.Auth.Devices != nil {
 		devicesAPI.OnRevoke = d.Auth.Devices.Revoked
+		devicesAPI.OnSessionsEnded = d.Auth.Devices.SessionsEnded
 	}
 	if d.Attention != nil {
 		// A registration's Needs-you item: Revoke revokes the device.
