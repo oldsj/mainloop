@@ -196,7 +196,7 @@ export function SessionPage({
     if (detail.isPending) {
       return (
         <div data-testid="session-page-loading" className="gap-sm p-md flex flex-col">
-          <p role="status" className="text-muted-foreground text-sm">
+          <p role="status" className="text-muted-foreground text-body">
             Loading session...
           </p>
           <Skeleton className="h-5 w-2/5" />
@@ -299,8 +299,8 @@ export function SessionPage({
         <h1
           className={
             compact
-              ? 'min-w-0 flex-1 truncate text-sm font-medium'
-              : 'text-lg font-medium break-words'
+              ? 'text-body min-w-0 flex-1 truncate font-medium'
+              : 'text-display font-semibold break-words'
           }
         >
           {session.title}
@@ -308,7 +308,7 @@ export function SessionPage({
         {compact && task ? <TaskLink view={task.view} /> : null}
         {compact ? <ViewToggle id={session.id} transcript={transcript} /> : null}
         {session.description && !compact ? (
-          <p className="text-muted-foreground text-sm break-words">{session.description}</p>
+          <p className="text-muted-foreground text-body break-words">{session.description}</p>
         ) : null}
       </header>
 
@@ -374,14 +374,14 @@ export function SessionPage({
             <p
               data-testid="session-action-notice"
               role="alert"
-              className={`px-md text-sm ${notice.tone === 'warn' ? 'text-term-yellow' : 'text-term-green'}`}
+              className={`px-md text-body ${notice.tone === 'warn' ? 'text-term-yellow' : 'text-term-green'}`}
             >
               {notice.text}
             </p>
           ) : null}
 
           {task ? (
-            <p className="px-md pt-sm text-sm">
+            <p className="px-md pt-sm text-body">
               Task{' '}
               <Link
                 to="/tasks/$id"
@@ -415,15 +415,15 @@ export function SessionPage({
 
           {session.status === 'completed' && session.summary ? (
             <section className="gap-xs p-md flex flex-col">
-              <h3 className="text-sm font-medium">Summary</h3>
-              <p className="text-sm break-words whitespace-pre-wrap">{session.summary}</p>
+              <h3 className="text-body font-medium">Summary</h3>
+              <p className="text-body break-words whitespace-pre-wrap">{session.summary}</p>
             </section>
           ) : null}
 
           {session.status === 'failed' && session.error ? (
             <section className="gap-xs p-md flex flex-col">
-              <h3 className="text-sm font-medium">Error</h3>
-              <p className="text-destructive text-sm break-words">{session.error}</p>
+              <h3 className="text-body font-medium">Error</h3>
+              <p className="text-destructive text-body break-words">{session.error}</p>
             </section>
           ) : null}
 
@@ -439,7 +439,7 @@ export function SessionPage({
             <Link
               to="/health"
               search={{ session_id: session.id }}
-              className="text-muted-foreground text-sm underline"
+              className="text-muted-foreground text-body underline"
             >
               Orchestration health
             </Link>
@@ -476,8 +476,8 @@ function SessionFailure({
   if (failure === 'not-found') {
     return (
       <section data-testid="session-not-found" className="gap-md p-md flex flex-col">
-        <h1 className="text-lg font-medium">Session not found</h1>
-        <p className="text-muted-foreground text-sm">
+        <h1 className="text-display font-semibold">Session not found</h1>
+        <p className="text-muted-foreground text-body">
           It doesn&apos;t exist, or you don&apos;t have access to it.
         </p>
         <div>

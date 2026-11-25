@@ -70,7 +70,7 @@ export default function HITLRequestPreview() {
     <div className="gap-md p-md grid">
       {states.map(([label, state]) => (
         <section key={label} className="gap-sm grid">
-          <h2 className="text-muted-foreground text-sm">{label}</h2>
+          <h2 className="text-muted-foreground text-body">{label}</h2>
           <div className="border-border rounded-none border">
             <HITLRequest
               snapshot={state}

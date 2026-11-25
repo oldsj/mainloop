@@ -10,10 +10,10 @@ One field that gets the owner anywhere without the mouse: jump to a task, sessio
 
 - Panel `bg-popover text-popover-foreground`, edge `border-border`, radius `rounded-none`. Up to 36 rem wide (`max-w-xl`), 16 px from the screen's edges on a phone, 96 px from the top.
 - Overlay `bg-background/80`.
-- Field: 44 px tall, `text-ui`, no edge of its own; a `border-border-subtle` rule under it. Placeholder `text-muted-foreground`.
-- Row: the control height (`min-h-control`), `text-ui`. Title in the foreground colour; the words beside it `text-muted-foreground text-xs`; the kind on the right in small capitals (`text-2xs uppercase tracking-wide`, muted).
+- Field: 44 px tall, `text-body`, no edge of its own; a `border-border-subtle` rule under it. Placeholder `text-muted-foreground`.
+- Row: the control height (`min-h-control`), `text-body`. Title in the foreground colour; the words beside it `text-muted-foreground text-caption`; the kind on the right in small capitals (`text-label uppercase tracking-wide`, muted).
 - Highlighted row `bg-accent text-accent-foreground`. Accent is selection here, never a status.
-- Key hints: one muted `text-2xs` line under the list, shown with a mouse or trackpad only.
+- Key hints: one muted `text-label` line under the list, shown with a mouse or trackpad only.
 
 ## States
 

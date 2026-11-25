@@ -43,10 +43,10 @@ export function ImportProjectSection() {
       className="gap-sm flex flex-col"
       data-testid="import-project"
     >
-      <h2 id="import-project-heading" className="text-base font-semibold">
+      <h2 id="import-project-heading" className="text-title font-semibold">
         Import a project
       </h2>
-      <p className="text-muted-foreground text-sm">
+      <p className="text-muted-foreground text-body">
         Add a GitHub repository that Mainloop&apos;s GitHub App is installed on. Importing starts no
         workspace or session; set the project up on its page afterwards.
       </p>
@@ -57,10 +57,10 @@ export function ImportProjectSection() {
           if (trimmed && !importProject.isPending) submit();
         }}
       >
-        <label className="gap-xs flex flex-col text-sm">
+        <label className="gap-xs text-body flex flex-col">
           Repository
           <input
-            className="border-border bg-background text-foreground px-md min-h-control border text-sm"
+            className="border-border bg-background text-foreground px-md min-h-control text-field border"
             placeholder="owner/name or https://github.com/owner/name"
             value={repo}
             disabled={importProject.isPending}
@@ -71,12 +71,12 @@ export function ImportProjectSection() {
           />
         </label>
         {importProject.error ? (
-          <p role="alert" className="text-destructive text-sm">
+          <p role="alert" className="text-destructive text-body">
             {failureText(importProject.error)}
           </p>
         ) : null}
         {contractError ? (
-          <p role="alert" className="text-destructive text-sm">
+          <p role="alert" className="text-destructive text-body">
             Mainloop imported the repository but sent a project that does not match the contract.
             Reload to see it.
           </p>
@@ -86,7 +86,7 @@ export function ImportProjectSection() {
         </Button>
       </form>
       {imported ? (
-        <div role="status" className="gap-sm flex flex-col text-sm">
+        <div role="status" className="gap-sm text-body flex flex-col">
           <p>Imported {imported.full_name}.</p>
           <Link
             to="/projects/$id"

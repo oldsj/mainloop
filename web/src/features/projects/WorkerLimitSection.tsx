@@ -30,7 +30,10 @@ export function WorkersRunning({ projectId }: { projectId: string }) {
   const { view } = useValidWorkerLimit(projectId);
   if (!view) return null;
   return (
-    <p className="text-muted-foreground text-sm tabular-nums" data-testid="project-workers-running">
+    <p
+      className="text-muted-foreground text-body tabular-nums"
+      data-testid="project-workers-running"
+    >
       {workersRunningText(view)}
     </p>
   );
@@ -54,12 +57,12 @@ export function WorkerLimitSection({ projectId }: { projectId: string }) {
       className="gap-md p-md border-border flex flex-col border"
       data-testid="worker-limit"
     >
-      <h3 id="worker-limit-heading" className="text-lg font-medium">
+      <h3 id="worker-limit-heading" className="text-title font-semibold">
         Workers
       </h3>
 
       {limit.isPending ? (
-        <p role="status" className="text-muted-foreground text-sm">
+        <p role="status" className="text-muted-foreground text-body">
           Loading the worker limit…
         </p>
       ) : null}
@@ -117,10 +120,10 @@ function LimitForm({
 
   return (
     <div className="gap-md flex flex-col">
-      <p className="text-sm tabular-nums" data-testid="worker-limit-running">
+      <p className="text-body tabular-nums" data-testid="worker-limit-running">
         {workersRunningText(view)}.
       </p>
-      <p className="text-muted-foreground text-sm" data-testid="worker-limit-source">
+      <p className="text-muted-foreground text-body" data-testid="worker-limit-source">
         {workerLimitSourceText(view)} {workerLimitGlobalText(view)}
       </p>
 
@@ -131,7 +134,7 @@ function LimitForm({
           if (canSave && value !== null) onSave(value);
         }}
       >
-        <label htmlFor={fieldId} className="text-sm">
+        <label htmlFor={fieldId} className="text-body">
           Workers at once
         </label>
         <div className="gap-sm flex flex-wrap items-center">
@@ -147,7 +150,7 @@ function LimitForm({
             aria-describedby={hintId}
             aria-invalid={value === null}
             onChange={(event) => setDraft(event.target.value)}
-            className="border-border bg-background text-foreground px-md min-h-control w-24 border text-sm tabular-nums"
+            className="border-border bg-background text-foreground px-md min-h-control text-field w-24 border tabular-nums"
           />
           <Button type="submit" disabled={!canSave}>
             {busy ? 'Saving…' : 'Save limit'}
@@ -160,7 +163,9 @@ function LimitForm({
         </div>
         <p
           id={hintId}
-          className={value === null ? 'text-destructive text-sm' : 'text-muted-foreground text-sm'}
+          className={
+            value === null ? 'text-destructive text-body' : 'text-muted-foreground text-body'
+          }
         >
           {value === null
             ? `Enter a whole number from ${WORKER_LIMIT_MIN} to ${WORKER_LIMIT_MAX}.`
@@ -168,7 +173,7 @@ function LimitForm({
         </p>
 
         {saveError ? (
-          <p role="alert" className="text-destructive text-sm">
+          <p role="alert" className="text-destructive text-body">
             {saveError}. The limit was not changed.
           </p>
         ) : null}

@@ -55,8 +55,8 @@ export function ConfirmDialog({
           }}
           className="inset-x-md gap-md border-border bg-background p-lg text-foreground fixed top-1/2 mx-auto grid max-w-md -translate-y-1/2 rounded-none border"
         >
-          <AlertDialog.Title className="text-lg font-medium">{title}</AlertDialog.Title>
-          <AlertDialog.Description className="text-muted-foreground text-sm">
+          <AlertDialog.Title className="text-title font-semibold">{title}</AlertDialog.Title>
+          <AlertDialog.Description className="text-muted-foreground text-body">
             {description}
           </AlertDialog.Description>
           <div className="gap-sm flex flex-col-reverse sm:flex-row sm:justify-end">

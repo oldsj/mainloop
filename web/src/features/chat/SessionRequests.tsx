@@ -24,7 +24,7 @@ export function SessionRequests({ sessionId, skip }: SessionRequestsProps) {
       aria-label="Session requests"
     >
       {isError ? (
-        <p className="text-muted-foreground p-md text-sm" role="status">
+        <p className="text-muted-foreground p-md text-body" role="status">
           Could not refresh session requests. Retrying…
         </p>
       ) : null}

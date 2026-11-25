@@ -39,7 +39,7 @@ export function WorkspacePublicationBadge({
       data-testid="workspace-publication-badge"
       title={workspace.publication_reason ?? 'Branch publication granted'}
       className={cn(
-        'px-sm py-xs text-muted-foreground border-border inline-flex max-w-full border text-xs',
+        'px-sm py-xs text-muted-foreground border-border text-caption inline-flex max-w-full border',
         className
       )}
     >

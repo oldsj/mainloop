@@ -103,12 +103,12 @@ export function FollowUp({ view, offline }: { view: TaskView; offline: boolean }
     >
       <form className="gap-sm flex flex-col" onSubmit={(event) => void submit(event)}>
         <label className="gap-xs flex flex-col">
-          <span id="follow-up-heading" className="text-sm font-medium">
+          <span id="follow-up-heading" className="text-body font-medium">
             Follow up
           </span>
           <textarea
             aria-describedby="follow-up-help"
-            className="border-input bg-background text-foreground p-sm w-full rounded-none border text-sm"
+            className="border-input bg-background text-foreground p-sm text-field w-full rounded-none border"
             rows={3}
             value={text}
             disabled={sending}
@@ -121,7 +121,7 @@ export function FollowUp({ view, offline }: { view: TaskView; offline: boolean }
         </label>
         <p
           id="follow-up-help"
-          className={over ? 'text-destructive text-xs' : 'text-muted-foreground text-xs'}
+          className={over ? 'text-destructive text-caption' : 'text-muted-foreground text-caption'}
         >
           {over
             ? `${text.length.toLocaleString()} of ${MAX_FOLLOW_UP.toLocaleString()} characters.`
@@ -132,7 +132,7 @@ export function FollowUp({ view, offline }: { view: TaskView; offline: boolean }
             {sending ? 'Sending…' : 'Send'}
           </Button>
           {offline ? (
-            <span className="text-muted-foreground text-xs">Mainloop is offline.</span>
+            <span className="text-muted-foreground text-caption">Mainloop is offline.</span>
           ) : null}
         </div>
       </form>
@@ -140,11 +140,11 @@ export function FollowUp({ view, offline }: { view: TaskView; offline: boolean }
         <div
           role={notice.tone === 'info' ? 'status' : 'alert'}
           data-testid="task-follow-up-notice"
-          className={`gap-xs flex flex-col text-sm ${notice.tone === 'info' ? 'text-term-green' : 'text-destructive'}`}
+          className={`gap-xs text-body flex flex-col ${notice.tone === 'info' ? 'text-term-green' : 'text-destructive'}`}
         >
           <p className="break-words">{notice.text}</p>
           {notice.reason ? (
-            <p className="text-xs">
+            <p className="text-caption">
               Server reason: <code>{notice.reason}</code>
             </p>
           ) : null}

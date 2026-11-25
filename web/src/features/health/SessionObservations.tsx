@@ -33,7 +33,7 @@ export function SessionObservations({ sessionId, hours }: { sessionId: string; h
         type="button"
         disabled={loading}
         onClick={() => (requested ? void events.refetch() : setRequested(true))}
-        className="border-border hover:border-foreground px-md min-h-control justify-self-start border text-sm disabled:opacity-50"
+        className="border-border hover:border-foreground px-md min-h-control text-body justify-self-start border disabled:opacity-50"
       >
         {loading ? 'Loading…' : 'Load source observations'}
       </button>
@@ -76,7 +76,7 @@ export function SessionObservations({ sessionId, hours }: { sessionId: string; h
             {observations.events.map((event) => (
               <li
                 key={`${event.payload.sequence}-${event.event_id}`}
-                className="text-muted-foreground text-xs break-words"
+                className="text-muted-foreground text-caption break-words"
               >
                 {eventLines(event).map((line, index) => (
                   <span key={index} className="block">

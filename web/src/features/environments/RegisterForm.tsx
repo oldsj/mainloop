@@ -21,7 +21,7 @@ export function RegisterForm({ busy, uncertain, error, onSubmit }: RegisterFormP
 
   return (
     <details className="border-border p-md border">
-      <summary className="py-sm min-h-control cursor-pointer text-sm font-medium">
+      <summary className="py-sm min-h-control text-body cursor-pointer font-medium">
         Register a public image
       </summary>
       <form
@@ -31,11 +31,11 @@ export function RegisterForm({ busy, uncertain, error, onSubmit }: RegisterFormP
           if (ready) onSubmit(draft);
         }}
       >
-        <label className="gap-xs flex flex-col text-sm">
+        <label className="gap-xs text-body flex flex-col">
           Name
           <input
             aria-label="Name"
-            className="border-border bg-background text-foreground px-md min-h-control border text-sm"
+            className="border-border bg-background text-foreground px-md min-h-control text-field border"
             maxLength={200}
             required
             value={draft.name}
@@ -43,11 +43,11 @@ export function RegisterForm({ busy, uncertain, error, onSubmit }: RegisterFormP
           />
         </label>
 
-        <label className="gap-xs flex flex-col text-sm">
+        <label className="gap-xs text-body flex flex-col">
           Image
           <input
             aria-label="Image"
-            className="border-border bg-background text-foreground px-md min-h-control border text-sm"
+            className="border-border bg-background text-foreground px-md min-h-control text-field border font-mono"
             required
             pattern={IMAGE_PATTERN}
             placeholder="registry/repository@sha256:digest"
@@ -56,11 +56,11 @@ export function RegisterForm({ busy, uncertain, error, onSubmit }: RegisterFormP
           />
         </label>
 
-        <label className="gap-xs flex flex-col text-sm">
+        <label className="gap-xs text-body flex flex-col">
           Architecture
           <select
             aria-label="Architecture"
-            className="border-border bg-background text-foreground px-md min-h-control border text-sm"
+            className="border-border bg-background text-foreground px-md min-h-control text-field border"
             value={draft.architecture}
             onChange={(event) =>
               setDraft({ ...draft, architecture: event.target.value as Architecture })
@@ -72,13 +72,13 @@ export function RegisterForm({ busy, uncertain, error, onSubmit }: RegisterFormP
         </label>
 
         {uncertain ? (
-          <p role="alert" className="text-term-yellow text-sm">
+          <p role="alert" className="text-term-yellow text-body">
             Registration reply was not confirmed. Refresh the list and reconcile it before
             registering again.
           </p>
         ) : null}
         {error ? (
-          <p role="alert" className="text-destructive text-sm">
+          <p role="alert" className="text-destructive text-body">
             {error}
           </p>
         ) : null}

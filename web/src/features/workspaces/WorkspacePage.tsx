@@ -64,7 +64,7 @@ export function WorkspacePage({ id }: { id: string }) {
     if (raw === undefined && !query.isError) {
       return (
         <WorkspaceUnavailable notice={notice}>
-          <p role="status" aria-busy="true" className="text-muted-foreground text-sm">
+          <p role="status" aria-busy="true" className="text-muted-foreground text-body">
             Loading workspace…
           </p>
         </WorkspaceUnavailable>
@@ -118,7 +118,7 @@ export function WorkspacePage({ id }: { id: string }) {
           description={<ShortId id={workspace.workspace_id} label="workspace" />}
         />
         {task ? (
-          <p data-testid="workspace-task-link" className="text-sm">
+          <p data-testid="workspace-task-link" className="text-body">
             <span className="text-muted-foreground">Task </span>
             <Link
               to="/tasks/$id"
@@ -127,7 +127,7 @@ export function WorkspacePage({ id }: { id: string }) {
             >
               {task.view.task.title}
             </Link>{' '}
-            <span className="text-muted-foreground text-xs">
+            <span className="text-muted-foreground text-caption">
               {statusLabel(task.view.task.status)}
               {task.current ? '' : ' · attempt superseded, history only'}
             </span>
@@ -213,8 +213,8 @@ function LifecycleSection({
   return (
     <section aria-labelledby="lifecycle-heading" className="gap-md flex flex-col">
       <div className="gap-md flex flex-col sm:flex-row sm:items-start sm:justify-between">
-        <div className="gap-xs flex flex-col text-sm">
-          <h2 id="lifecycle-heading" className="text-base font-medium">
+        <div className="gap-xs text-body flex flex-col">
+          <h2 id="lifecycle-heading" className="text-title font-semibold">
             Lifecycle
           </h2>
           <p className="text-muted-foreground">
@@ -245,7 +245,7 @@ function LifecycleSection({
         <p
           role={failed ? 'alert' : 'status'}
           className={cn(
-            'px-md py-sm border-l-2 text-sm',
+            'px-md py-sm text-body border-l-2',
             failed ? 'border-destructive text-destructive' : 'border-term-yellow text-term-yellow'
           )}
         >
@@ -254,7 +254,7 @@ function LifecycleSection({
       ) : hint ? (
         <p
           role="status"
-          className="border-term-yellow text-term-yellow px-md py-sm border-l-2 text-sm"
+          className="border-term-yellow text-term-yellow px-md py-sm text-body border-l-2"
         >
           {hint}
         </p>
@@ -271,7 +271,7 @@ function ActionNotice({ notice }: { notice: Notice }) {
       role={warn ? 'alert' : 'status'}
       data-testid="workspace-action-notice"
       className={cn(
-        'px-md py-sm border-l-2 text-sm',
+        'px-md py-sm text-body border-l-2',
         warn ? 'border-term-yellow text-term-yellow' : 'border-term-green text-term-green'
       )}
     >
@@ -302,8 +302,8 @@ function WorkspaceUnavailable({
       {notice ? <ActionNotice notice={notice} /> : null}
       {children ?? (
         <>
-          <h1 className="text-lg font-medium">{title}</h1>
-          <p className="text-muted-foreground text-sm">{message}</p>
+          <h1 className="text-display font-semibold">{title}</h1>
+          <p className="text-muted-foreground text-body">{message}</p>
         </>
       )}
       {title || onRetry ? (
@@ -316,7 +316,7 @@ function WorkspaceUnavailable({
           {title ? (
             <Link
               to="/"
-              className="text-muted-foreground min-h-control inline-flex items-center text-sm underline"
+              className="text-muted-foreground min-h-control text-body inline-flex items-center underline"
             >
               Back to sessions
             </Link>

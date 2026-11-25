@@ -25,7 +25,7 @@ function ReportScreenshot({ taskId, id }: { taskId: string; id: string }) {
   if (shot.isPending) {
     return (
       <div
-        className="border-border text-muted-foreground flex h-40 w-24 items-center justify-center border text-xs"
+        className="border-border text-muted-foreground text-caption flex h-40 w-24 items-center justify-center border"
         role="status"
       >
         Loading…
@@ -33,7 +33,7 @@ function ReportScreenshot({ taskId, id }: { taskId: string; id: string }) {
     );
   }
   if (shot.isError || !shot.data) {
-    return <p className="text-muted-foreground text-xs">Screenshot unavailable</p>;
+    return <p className="text-muted-foreground text-caption">Screenshot unavailable</p>;
   }
   const s = shot.data;
   const caption = `${s.viewport} · port ${s.port} ${s.path}`;
@@ -41,10 +41,10 @@ function ReportScreenshot({ taskId, id }: { taskId: string; id: string }) {
     // The image expired; the screenshot's facts stay.
     return (
       <figure className="gap-2xs flex flex-col">
-        <div className="border-border text-muted-foreground flex h-40 w-24 items-center justify-center border text-xs">
+        <div className="border-border text-muted-foreground text-caption flex h-40 w-24 items-center justify-center border">
           Expired
         </div>
-        <figcaption className="text-muted-foreground text-2xs break-all">{caption}</figcaption>
+        <figcaption className="text-muted-foreground text-label break-all">{caption}</figcaption>
       </figure>
     );
   }
@@ -62,7 +62,7 @@ function ReportScreenshot({ taskId, id }: { taskId: string; id: string }) {
             : 'border-border h-auto w-full max-w-xl border'
         }
       />
-      <figcaption className="text-muted-foreground text-2xs break-all">{caption}</figcaption>
+      <figcaption className="text-muted-foreground text-label break-all">{caption}</figcaption>
     </figure>
   );
 }

@@ -20,8 +20,8 @@ export function PanelBoundary({ name, children }: { name: string; children: Reac
             data-testid={`panel-error-${name.toLowerCase()}`}
             className="p-md gap-sm flex flex-col"
           >
-            <h2 className="text-destructive text-sm font-semibold">{name} failed to load</h2>
-            <p className="text-muted-foreground text-xs">
+            <h2 className="text-destructive text-body font-semibold">{name} failed to load</h2>
+            <p className="text-muted-foreground text-caption">
               {error instanceof Error && error.message ? error.message : 'Something went wrong.'}
             </p>
             <button

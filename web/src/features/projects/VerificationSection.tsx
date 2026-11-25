@@ -31,12 +31,12 @@ export function VerificationSection({ projectId }: { projectId: string }) {
       className="gap-md p-md border-border flex flex-col border"
       data-testid="verification"
     >
-      <h3 id="verification-heading" className="text-lg font-medium">
+      <h3 id="verification-heading" className="text-title font-semibold">
         Checks
       </h3>
 
       {verification.isPending ? (
-        <p role="status" className="text-muted-foreground text-sm">
+        <p role="status" className="text-muted-foreground text-body">
           Loading checks setting…
         </p>
       ) : null}
@@ -98,10 +98,10 @@ function VerificationForm({
   const [draft, setDraft] = useState<VerificationMode>(mode);
   return (
     <div className="gap-md flex flex-col">
-      <p className="text-sm">{summary}</p>
-      <p className="text-muted-foreground text-sm">{explanation}</p>
+      <p className="text-body">{summary}</p>
+      <p className="text-muted-foreground text-body">{explanation}</p>
       {detectError ? (
-        <p className="text-term-yellow text-sm">
+        <p className="text-term-yellow text-body">
           Could not re-check the project's CI: {detectError}
         </p>
       ) : null}
@@ -112,11 +112,11 @@ function VerificationForm({
           if (draft !== mode && !busy) onSave(draft);
         }}
       >
-        <label className="gap-xs flex flex-col text-sm">
+        <label className="gap-xs text-body flex flex-col">
           Heavy checks run in
           <select
             aria-label="Heavy checks run in"
-            className="border-border bg-background text-foreground px-md min-h-control border text-sm"
+            className="border-border bg-background text-foreground px-md min-h-control text-field border"
             value={draft}
             disabled={busy}
             onChange={(event) => setDraft(event.target.value as VerificationMode)}
@@ -129,7 +129,7 @@ function VerificationForm({
           </select>
         </label>
         {saveError ? (
-          <p role="alert" className="text-destructive text-sm">
+          <p role="alert" className="text-destructive text-body">
             {saveError}
           </p>
         ) : null}

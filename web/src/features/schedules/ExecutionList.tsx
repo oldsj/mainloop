@@ -18,10 +18,10 @@ export function ExecutionList({ scheduleId }: { scheduleId: string }) {
 
   return (
     <section aria-labelledby="executions-heading" className="gap-md flex min-w-0 flex-col">
-      <h2 id="executions-heading" className="text-base font-medium">
+      <h2 id="executions-heading" className="text-title font-semibold">
         Executions
       </h2>
-      {executions.isPending ? <p className="text-sm">Loading executions…</p> : null}
+      {executions.isPending ? <p className="text-body">Loading executions…</p> : null}
       {executions.isError && items.length === 0 ? (
         <ErrorRecovery
           title="Could not load executions"
@@ -31,7 +31,7 @@ export function ExecutionList({ scheduleId }: { scheduleId: string }) {
         />
       ) : null}
       {executions.isSuccess && items.length === 0 ? (
-        <p className="text-muted-foreground text-sm">No runs yet.</p>
+        <p className="text-muted-foreground text-body">No runs yet.</p>
       ) : null}
       {items.length > 0 ? (
         <ol className="gap-sm flex flex-col">
@@ -58,7 +58,7 @@ function ExecutionRow({ execution }: { execution: ScheduleExecution }) {
   return (
     <li className="border-border p-md gap-xs flex min-w-0 flex-col border">
       <div className="gap-sm flex flex-wrap items-center justify-between">
-        <span className="text-sm font-medium">
+        <span className="text-body font-medium">
           {execution.scheduled_time ? 'Scheduled run' : 'Manual run'}
         </span>
         <StatusBadge
@@ -66,20 +66,22 @@ function ExecutionRow({ execution }: { execution: ScheduleExecution }) {
           tone={executionStateTone(execution.state)}
         />
       </div>
-      <p className="text-muted-foreground text-xs">Created {relativeTime(execution.created_at)}</p>
+      <p className="text-muted-foreground text-caption">
+        Created {relativeTime(execution.created_at)}
+      </p>
       {execution.failure_reason ? (
-        <p className="text-destructive text-xs break-words">{execution.failure_reason}</p>
+        <p className="text-destructive text-caption break-words">{execution.failure_reason}</p>
       ) : null}
       {execution.session_id ? (
         <Link
           to="/sessions/$id"
           params={{ id: execution.session_id }}
-          className="text-foreground min-h-control inline-flex items-center text-sm underline"
+          className="text-foreground min-h-control text-body inline-flex items-center underline"
         >
           Open session
         </Link>
       ) : (
-        <p className="text-muted-foreground text-xs">No session yet.</p>
+        <p className="text-muted-foreground text-caption">No session yet.</p>
       )}
     </li>
   );

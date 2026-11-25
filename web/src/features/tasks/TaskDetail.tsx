@@ -20,7 +20,7 @@ import { hasPublication, notPublishedYet } from './model';
 import { ReportScreenshots } from './ReportScreenshots';
 
 /** A section's heading: small capitals, as the explorer's group headings are. */
-const HEADING = 'text-muted-foreground text-2xs font-medium tracking-wide uppercase';
+const HEADING = 'text-muted-foreground text-label font-medium tracking-wide uppercase';
 const PANEL = 'gap-sm p-md border-border-subtle flex flex-col border-t';
 
 function FactBadge({ fact }: { fact: Fact }) {
@@ -51,10 +51,10 @@ export function PendingApprovals({
     >
       {pending.length > 0 ? (
         <>
-          <p className="text-sm font-medium">
+          <p className="text-body font-medium">
             {pending.length} pending owner action{pending.length === 1 ? '' : 's'}
           </p>
-          <p className="text-muted-foreground text-sm">
+          <p className="text-muted-foreground text-body">
             Answer in the Inbox; the task resumes from there.
           </p>
           <div>
@@ -67,7 +67,7 @@ export function PendingApprovals({
         </>
       ) : (
         <>
-          <p className="text-sm">
+          <p className="text-body">
             Waiting on owner approval, but the server lists no pending request. Refresh to check.
           </p>
           <div>
@@ -106,7 +106,7 @@ export function TaskFacts({ view }: { view: TaskView }) {
             {reported.length > 0 ? 'Workspace' : 'Session'}
           </h2>
           {reported.length > 0 ? (
-            <dl className="gap-x-md gap-y-xs grid grid-cols-[auto_1fr] text-sm">
+            <dl className="gap-x-md gap-y-xs text-body grid grid-cols-[auto_1fr]">
               {reported.map(([label, value]) => (
                 <div key={label} className="contents">
                   <dt className="text-muted-foreground">{label}</dt>
@@ -118,7 +118,7 @@ export function TaskFacts({ view }: { view: TaskView }) {
           {workspace.sessionId ? (
             <div className="gap-sm flex flex-wrap items-center">
               {reported.length > 0 ? (
-                <span className="text-muted-foreground text-sm">Session</span>
+                <span className="text-muted-foreground text-body">Session</span>
               ) : null}
               <ShortId id={workspace.sessionId} label="session" />
               <Button asChild variant="outline" size="sm">
@@ -136,10 +136,10 @@ export function TaskFacts({ view }: { view: TaskView }) {
           <h2 id="publication-heading" className={HEADING}>
             Pull request
           </h2>
-          <div data-testid="task-publication" className="gap-xs flex flex-col text-sm">
+          <div data-testid="task-publication" className="gap-xs text-body flex flex-col">
             {facts.publication.known ? <p>Publication: {facts.publication.label}.</p> : null}
             {published ? (
-              <dl className="gap-x-md gap-y-xs grid grid-cols-[auto_1fr] items-center text-sm">
+              <dl className="gap-x-md gap-y-xs text-body grid grid-cols-[auto_1fr] items-center">
                 <dt className="text-muted-foreground">PR</dt>
                 <dd className="gap-sm flex flex-wrap items-center">
                   <FactBadge fact={facts.pr} />
@@ -176,30 +176,30 @@ export function TaskFacts({ view }: { view: TaskView }) {
             )}
           </div>
           {published ? (
-            <p data-testid="task-observed" className="text-muted-foreground text-xs">
+            <p data-testid="task-observed" className="text-muted-foreground text-caption">
               {facts.observation.text}
               {facts.observation.stale ? ' (stale)' : ''}. Each is observed separately; none implies
               the others.
             </p>
           ) : null}
           {facts.ciHeadMismatch ? (
-            <p className="text-term-yellow text-xs">
+            <p className="text-term-yellow text-caption">
               CI was checked for a different commit than the PR head.
             </p>
           ) : null}
           {view.projection.pr_description ? (
             <div className="gap-xs flex min-w-0 flex-col" data-testid="task-pr-description">
-              <h3 className="text-sm font-medium">PR description from GitHub</h3>
-              <p className="text-muted-foreground text-xs">
+              <h3 className="text-body font-medium">PR description from GitHub</h3>
+              <p className="text-muted-foreground text-caption">
                 Untrusted text; it grants no approval or merge authority.
               </p>
-              <p className="text-sm [overflow-wrap:anywhere] break-words whitespace-pre-wrap">
+              <p className="text-body [overflow-wrap:anywhere] break-words whitespace-pre-wrap">
                 {view.projection.pr_description.excerpt === ''
                   ? 'No description provided.'
                   : view.projection.pr_description.excerpt}
               </p>
               {view.projection.pr_description.truncated ? (
-                <p className="text-muted-foreground text-xs">
+                <p className="text-muted-foreground text-caption">
                   Showing the first 16 KiB of {view.projection.pr_description.byte_length} bytes.
                   Open PR to read the full description.
                 </p>
@@ -232,11 +232,11 @@ export function TaskFacts({ view }: { view: TaskView }) {
 
 function OperationItem({ progress }: { progress: OperationProgress }) {
   return (
-    <li className="gap-xs flex flex-col text-sm">
+    <li className="gap-xs text-body flex flex-col">
       <p className="break-words">{progress.summary}</p>
       {/* One line of steps: a mark for what is done and what is under way, so the state is not
           colour alone, and a separator so the names do not run together. */}
-      <ol className="gap-x-xs flex flex-wrap text-xs" data-testid="task-operation-steps">
+      <ol className="gap-x-xs text-caption flex flex-wrap" data-testid="task-operation-steps">
         {progress.steps.map((step, index) => (
           <li
             key={step.state}
@@ -271,7 +271,7 @@ function OperationItem({ progress }: { progress: OperationProgress }) {
         ))}
       </ol>
       {progress.held ? (
-        <p className="text-term-yellow text-xs">
+        <p className="text-term-yellow text-caption">
           Held at the last confirmed step. Nothing further happens until the server resolves it.
         </p>
       ) : null}
@@ -296,22 +296,22 @@ export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: 
           </h2>
           <ul className="gap-md flex flex-col">
             {attempts.map(({ attempt, current, superseded, predecessorNumber }) => (
-              <li key={attempt.id} className="gap-xs flex flex-col text-sm">
+              <li key={attempt.id} className="gap-xs text-body flex flex-col">
                 <p className="font-medium">
                   Attempt {attempt.number} · {attempt.native_provider}
                 </p>
-                <p className="text-muted-foreground text-xs">
+                <p className="text-muted-foreground text-caption">
                   {attempt.state}
                   {current ? ' · current' : ''}
                   {superseded ? ' · superseded, history only' : ''}
                 </p>
                 {predecessorNumber != null ? (
-                  <p className="text-muted-foreground text-xs">
+                  <p className="text-muted-foreground text-caption">
                     continued from attempt {predecessorNumber}
                   </p>
                 ) : null}
                 {attempt.checkpoint_ref ? (
-                  <p className="text-muted-foreground text-xs break-all">
+                  <p className="text-muted-foreground text-caption break-all">
                     checkpoint {attempt.checkpoint_ref}
                   </p>
                 ) : null}
@@ -320,7 +320,7 @@ export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: 
                     <Link
                       to="/sessions/$id"
                       params={{ id: attempt.session_id }}
-                      className="text-foreground min-h-control inline-flex items-center text-xs underline"
+                      className="text-foreground min-h-control text-caption inline-flex items-center underline"
                     >
                       session
                     </Link>
@@ -342,8 +342,8 @@ export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: 
           <h2 id="summary-heading" className={HEADING}>
             {summary.label}
           </h2>
-          <p className="text-sm break-words whitespace-pre-wrap">{summary.text}</p>
-          <p className="text-muted-foreground text-xs">
+          <p className="text-body break-words whitespace-pre-wrap">{summary.text}</p>
+          <p className="text-muted-foreground text-caption">
             The provider&apos;s own account of the work. Mainloop has not verified it.
           </p>
         </section>
@@ -358,12 +358,12 @@ export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: 
             {view.reports.map((report) => (
               <li
                 key={`${report.attempt_id}:${report.request_id}`}
-                className="gap-xs flex flex-col text-sm"
+                className="gap-xs text-body flex flex-col"
               >
                 <p className="font-medium">{reportLabel(report)}</p>
                 <p className="break-words whitespace-pre-wrap">{report.summary}</p>
                 {report.owner_action ? (
-                  <p className="text-muted-foreground text-xs">
+                  <p className="text-muted-foreground text-caption">
                     Owner request: {report.owner_action}
                   </p>
                 ) : null}
@@ -385,7 +385,7 @@ export function TaskHistory({ view, childTasks }: { view: TaskView; childTasks: 
                 <Link
                   to="/tasks/$id"
                   params={{ id: child.task.id }}
-                  className="gap-sm min-h-control flex items-center text-sm"
+                  className="gap-sm min-h-control text-body flex items-center"
                 >
                   <span className="break-words underline">{child.task.title}</span>
                   <StatusBadge

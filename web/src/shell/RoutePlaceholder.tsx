@@ -12,8 +12,8 @@ export function RoutePlaceholder({
 }) {
   return (
     <section data-testid={testId} className="p-md">
-      <h2 className="text-foreground text-sm font-semibold">{title}</h2>
-      <p className="text-muted-foreground text-xs">{detail ?? `Not built yet (${slice}).`}</p>
+      <h2 className="text-foreground text-body font-semibold">{title}</h2>
+      <p className="text-muted-foreground text-caption">{detail ?? `Not built yet (${slice}).`}</p>
     </section>
   );
 }

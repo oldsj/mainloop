@@ -158,7 +158,7 @@ export function CompactShell({
             <span
               data-testid="needs-badge"
               aria-hidden="true"
-              className="bg-destructive text-destructive-foreground text-2xs absolute -top-1.5 left-3 inline-flex min-w-4 items-center justify-center px-0.5 leading-4 font-semibold tabular-nums"
+              className="bg-destructive text-destructive-foreground text-label absolute -top-1.5 left-3 inline-flex min-w-4 items-center justify-center px-0.5 leading-4 font-semibold tabular-nums"
             >
               {badgeText(needs)}
             </span>
@@ -212,7 +212,7 @@ function BarItem({
       aria-expanded={expanded}
       onClick={onClick}
       className={cn(
-        'gap-xs text-2xs flex min-h-11 flex-1 flex-col items-center justify-center',
+        'gap-xs text-label flex min-h-11 flex-1 flex-col items-center justify-center',
         on ? 'bg-accent text-accent-foreground font-semibold' : 'text-muted-foreground'
       )}
     >

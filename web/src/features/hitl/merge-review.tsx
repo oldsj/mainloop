@@ -133,8 +133,8 @@ function DetailSection({
         if (event.currentTarget.open && !state.loaded) void fetchPage(state.retryCursor);
       }}
     >
-      <summary className="py-sm min-h-control cursor-pointer text-sm">{title}</summary>
-      <div className="gap-sm pb-md grid text-sm">
+      <summary className="py-sm min-h-control text-body cursor-pointer">{title}</summary>
+      <div className="gap-sm pb-md text-body grid">
         {state.loading && !state.loaded ? <p role="status">Loading…</p> : null}
         {state.error ? (
           <div className="gap-sm grid">
@@ -262,7 +262,7 @@ export function VerifiedMerge({
   return (
     <section
       aria-label="Verified merge context"
-      className="gap-sm border-border p-md grid rounded-none border text-sm"
+      className="gap-sm border-border p-md text-body grid rounded-none border"
     >
       <h4 className="font-medium">{summary.title || 'PR title unavailable'}</h4>
       {summary.description_excerpt ? (
@@ -427,7 +427,7 @@ export function UnavailableMerge({
   return (
     <section
       aria-label="Merge context unavailable"
-      className="gap-sm border-term-yellow p-md grid rounded-none border text-sm"
+      className="gap-sm border-term-yellow p-md text-body grid rounded-none border"
     >
       <h4 className="font-medium">Merge evidence unavailable · call {toolId}</h4>
       <p>

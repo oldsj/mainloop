@@ -4,7 +4,7 @@ import type { ComponentProps } from 'react';
 import { cn } from './cn';
 
 const buttonVariants = cva(
-  'inline-flex min-h-control shrink-0 items-center justify-center gap-sm whitespace-nowrap rounded-none border border-transparent px-md text-ui font-medium transition-colors disabled:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
+  'inline-flex min-h-control shrink-0 items-center justify-center gap-sm whitespace-nowrap rounded-none border border-transparent px-md text-body font-medium transition-colors disabled:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0',
   {
     variants: {
       // A disabled primary drops its accent fill for an outline with muted text, so it cannot read as
@@ -18,7 +18,7 @@ const buttonVariants = cva(
           'border-border-subtle bg-transparent text-foreground hover:bg-accent disabled:opacity-50',
         ghost: 'text-foreground hover:bg-accent disabled:opacity-50'
       },
-      size: { default: '', sm: 'px-sm text-xs', icon: 'w-control px-0' }
+      size: { default: '', sm: 'px-sm text-caption', icon: 'w-control px-0' }
     },
     defaultVariants: { variant: 'default', size: 'default' }
   }

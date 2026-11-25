@@ -112,10 +112,10 @@ export function WorkspaceServiceSection({ projectId }: { projectId: string }) {
       className="gap-md p-md border-border flex flex-col border"
       data-testid="workspace-service"
     >
-      <h3 id="workspace-service-heading" className="text-lg font-medium">
+      <h3 id="workspace-service-heading" className="text-title font-semibold">
         Workspace service
       </h3>
-      <p className="text-muted-foreground text-sm">
+      <p className="text-muted-foreground text-body">
         A development server Mainloop keeps running in each of this project&apos;s workspaces, and
         the ports their preview links reach. The server starts in the checkout when the workspace
         starts and again whenever it wakes, with MAINLOOP_WORKSPACE_ID and MAINLOOP_PREVIEW_URLS
@@ -123,7 +123,7 @@ export function WorkspaceServiceSection({ projectId }: { projectId: string }) {
       </p>
 
       {service.isPending ? (
-        <p role="status" className="text-muted-foreground text-sm">
+        <p role="status" className="text-muted-foreground text-body">
           Loading workspace service…
         </p>
       ) : null}
@@ -184,7 +184,7 @@ function ServiceForm({ saved, busy, saveError, onSave }: ServiceFormProps) {
         if (changed && !invalid && !busy) onSave({ command, ports });
       }}
     >
-      <p className="text-sm">
+      <p className="text-body">
         {saved.command.length === 0 ? (
           'No workspace service. Workspaces start no server of their own.'
         ) : (
@@ -193,19 +193,19 @@ function ServiceForm({ saved, busy, saveError, onSave }: ServiceFormProps) {
           </>
         )}
       </p>
-      <p className="text-sm">
+      <p className="text-body">
         {saved.ports.length === 0
           ? 'No preview ports.'
           : `Preview ports: ${saved.ports.map((port) => `${port.name} ${port.number}`).join(', ')}`}
       </p>
 
-      <label className="gap-xs flex flex-col text-sm" htmlFor="workspace-service-command">
+      <label className="gap-xs text-body flex flex-col" htmlFor="workspace-service-command">
         Command, one argument per line
       </label>
       <textarea
         id="workspace-service-command"
         aria-describedby="workspace-service-hint"
-        className="border-border bg-background text-foreground p-sm min-h-24 border text-sm"
+        className="border-border bg-background text-foreground p-sm text-field min-h-24 border font-mono"
         value={commandDraft}
         disabled={busy}
         spellCheck={false}
@@ -214,24 +214,24 @@ function ServiceForm({ saved, busy, saveError, onSave }: ServiceFormProps) {
         rows={3}
         onChange={(event) => setCommandDraft(event.target.value)}
       />
-      <p id="workspace-service-hint" className="text-muted-foreground text-sm">
+      <p id="workspace-service-hint" className="text-muted-foreground text-body">
         The first line is the program, found on the workspace&apos;s PATH or relative to the
         checkout, for example <code>scripts/dev/workspace.sh</code> then <code>run</code>. Leave it
         empty to declare none.
       </p>
       {commandError ? (
-        <p role="alert" className="text-destructive text-sm">
+        <p role="alert" className="text-destructive text-body">
           {commandError}
         </p>
       ) : null}
 
-      <label className="gap-xs flex flex-col text-sm" htmlFor="workspace-service-ports">
+      <label className="gap-xs text-body flex flex-col" htmlFor="workspace-service-ports">
         Preview ports, one name=number per line
       </label>
       <textarea
         id="workspace-service-ports"
         aria-describedby="workspace-service-ports-hint"
-        className="border-border bg-background text-foreground p-sm min-h-16 border text-sm"
+        className="border-border bg-background text-foreground p-sm text-field min-h-16 border font-mono"
         value={portsDraft}
         disabled={busy}
         spellCheck={false}
@@ -240,18 +240,18 @@ function ServiceForm({ saved, busy, saveError, onSave }: ServiceFormProps) {
         rows={2}
         onChange={(event) => setPortsDraft(event.target.value)}
       />
-      <p id="workspace-service-ports-hint" className="text-muted-foreground text-sm">
+      <p id="workspace-service-ports-hint" className="text-muted-foreground text-body">
         For example <code>web=3000</code>. Each port gets a preview link in every new workspace,
         including task workspaces. At most {SERVICE_MAX_PORTS}.
       </p>
       {portsError ? (
-        <p role="alert" className="text-destructive text-sm">
+        <p role="alert" className="text-destructive text-body">
           {portsError}
         </p>
       ) : null}
 
       {saveError ? (
-        <p role="alert" className="text-destructive text-sm">
+        <p role="alert" className="text-destructive text-body">
           {saveError}
         </p>
       ) : null}

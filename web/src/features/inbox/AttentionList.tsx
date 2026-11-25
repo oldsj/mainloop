@@ -60,7 +60,7 @@ export function AttentionList({ selected }: { selected?: string }) {
 
   if (attention.isPending) {
     return (
-      <p role="status" className="text-muted-foreground p-md text-sm">
+      <p role="status" className="text-muted-foreground p-md text-body">
         Checking what needs you…
       </p>
     );
@@ -104,7 +104,7 @@ export function ProblemList() {
 
   if (attention.isPending) {
     return (
-      <p role="status" className="text-muted-foreground p-md text-sm">
+      <p role="status" className="text-muted-foreground p-md text-body">
         Checking what Mainloop is handling…
       </p>
     );
@@ -208,7 +208,7 @@ export function AttentionRows({
   if (rows.length === 0 && tasks.length === 0) {
     if (refreshFailed) return null;
     return (
-      <div className="p-md text-sm">
+      <div className="p-md text-body">
         <p className="font-medium">{emptyTitle}</p>
         <p className="text-muted-foreground mt-xs">{emptyBody}</p>
       </div>
@@ -315,7 +315,7 @@ function NeedsRow({ row, selected }: { row: Row; selected?: string }) {
     >
       <div className="gap-sm flex flex-col">
         {row.item?.needed ? (
-          <p className="px-md pt-md text-sm break-words">{row.item.needed}</p>
+          <p className="px-md pt-md text-body break-words">{row.item.needed}</p>
         ) : null}
         <HITLCard requestId={row.requestId} />
       </div>
@@ -331,8 +331,8 @@ function TaskEntry({ view, action }: { view: TaskView; action: string }) {
   const { task } = view;
   return (
     <div className="gap-xs p-md flex flex-col">
-      <h2 className="text-sm font-medium break-words">{task.title.trim() || 'Untitled task'}</h2>
-      <p className="text-muted-foreground text-sm break-words">{statusLine(view)}</p>
+      <h2 className="text-body font-medium break-words">{task.title.trim() || 'Untitled task'}</h2>
+      <p className="text-muted-foreground text-body break-words">{statusLine(view)}</p>
       <Link
         to="/tasks/$id"
         params={{ id: task.id }}
@@ -359,8 +359,8 @@ function AttentionEntry({ item }: { item: AttentionItem }) {
   const taskId = taskIdOf(item.task_id, item.href);
   return (
     <div className="gap-xs p-md flex flex-col">
-      <h2 className="text-sm font-medium break-words">{item.title}</h2>
-      <p className="text-muted-foreground text-sm break-words">{item.needed}</p>
+      <h2 className="text-body font-medium break-words">{item.title}</h2>
+      <p className="text-muted-foreground text-body break-words">{item.needed}</p>
       {taskId ? (
         <Link
           to="/tasks/$id"

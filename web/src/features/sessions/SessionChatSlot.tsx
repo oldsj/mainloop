@@ -56,7 +56,7 @@ export function SessionChatSlot({
       aria-label="Session chat"
       className="border-border flex min-h-0 flex-1 flex-col border"
     >
-      <div className="gap-sm px-md border-border-subtle text-muted-foreground min-h-control flex flex-wrap items-center border-b py-1 text-xs">
+      <div className="gap-sm px-md border-border-subtle text-muted-foreground min-h-control text-caption flex flex-wrap items-center border-b py-1">
         <span className="text-foreground" data-testid="session-chat-state" role="status">
           {cancelled ? 'cancelled' : needsYou ? 'needs you' : statusWords(status)}
         </span>

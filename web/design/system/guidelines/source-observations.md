@@ -9,7 +9,7 @@ The source events for one session in the chosen window: tool calls, turns and us
 ## Tokens
 
 - A text button with a `border-border` edge, at least 44 px tall. It dims while loading (`disabled:opacity-50`).
-- Event lines use `text-muted-foreground text-xs`. Each event is a list item; its lines are stacked spans.
+- Event lines use `text-muted-foreground text-caption`. Each event is a list item; its lines are stacked spans.
 - Partial and dropped notes use `text-term-yellow`. The empty state uses `text-muted-foreground`.
 - Errors use the shared error recovery block.
 

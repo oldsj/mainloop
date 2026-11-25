@@ -13,8 +13,8 @@ export function ErrorPage({
 }) {
   return (
     <main role="alert" data-testid="error-page" className="p-lg mx-auto max-w-xl">
-      {status !== undefined && <p className="text-destructive text-3xl">{status}</p>}
-      <p className="mt-sm text-foreground text-sm">{message}</p>
+      {status !== undefined && <p className="text-destructive text-display">{status}</p>}
+      <p className="mt-sm text-foreground text-body">{message}</p>
       <div className="mt-md gap-sm flex">
         <Link to="/" className={cn(buttonVariants({ variant: 'outline' }))}>
           Back to home

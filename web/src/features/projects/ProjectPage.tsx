@@ -150,7 +150,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
           }
         />
         <div className="gap-xs flex min-w-0 flex-col">
-          <div className="gap-sm text-muted-foreground flex flex-wrap items-center text-xs">
+          <div className="gap-sm text-muted-foreground text-caption flex flex-wrap items-center">
             {github ? (
               <a
                 href={github}
@@ -179,7 +179,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
           {/* The task list can be long, so what sits below it is one press away from the top. */}
           <nav
             aria-label="On this page"
-            className="gap-sm text-muted-foreground flex flex-wrap items-center text-xs"
+            className="gap-sm text-muted-foreground text-caption flex flex-wrap items-center"
           >
             <span>On this page:</span>
             <button
@@ -213,22 +213,22 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
         data-testid="project-tasks"
       >
         <div className="gap-sm flex flex-wrap items-center justify-between">
-          <h2 id="project-tasks-heading" className="text-lg font-medium">
+          <h2 id="project-tasks-heading" className="text-title font-semibold">
             Tasks
           </h2>
           <WorkersRunning projectId={id} />
         </div>
-        {tasks ?? <p className="text-muted-foreground text-sm">No tasks for this project yet.</p>}
+        {tasks ?? <p className="text-muted-foreground text-body">No tasks for this project yet.</p>}
       </section>
 
       <MemorySection projectId={id} />
 
       <section aria-labelledby="project-prs-heading" className="gap-md flex flex-col">
-        <h2 id="project-prs-heading" className="text-lg font-medium">
+        <h2 id="project-prs-heading" className="text-title font-semibold">
           Open Pull Requests
         </h2>
         {pulls.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No open pull requests</p>
+          <p className="text-muted-foreground text-body">No open pull requests</p>
         ) : (
           <ul className="gap-sm flex flex-col">
             {pulls.map((pr) => (
@@ -239,11 +239,11 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
       </section>
 
       <section aria-labelledby="project-sessions-heading" className="gap-md flex flex-col">
-        <h2 id="project-sessions-heading" className="text-lg font-medium">
+        <h2 id="project-sessions-heading" className="text-title font-semibold">
           Sessions
         </h2>
         {sessions.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No sessions yet</p>
+          <p className="text-muted-foreground text-body">No sessions yet</p>
         ) : (
           <ul className="gap-sm flex flex-col">
             {sessions.map((session) => (
@@ -260,7 +260,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
       </section>
 
       <section aria-labelledby="project-workspaces-heading" className="gap-md flex flex-col">
-        <h2 id="project-workspaces-heading" className="text-lg font-medium">
+        <h2 id="project-workspaces-heading" className="text-title font-semibold">
           Branch workspaces
         </h2>
         {workspaces.isError && !workspaces.data ? (
@@ -273,7 +273,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
           />
         ) : null}
         {workspaces.isSuccess && branchWorkspaces.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No branch workspaces yet.</p>
+          <p className="text-muted-foreground text-body">No branch workspaces yet.</p>
         ) : null}
         {branchWorkspaces.length > 0 ? (
           <ul className="gap-sm flex flex-col">
@@ -284,8 +284,10 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
                   params={{ id: workspace.workspace_id }}
                   className="group gap-sm p-md border-border bg-background text-foreground hover:bg-accent hover:text-accent-foreground min-h-control flex flex-wrap items-center justify-between border"
                 >
-                  <span className="truncate text-sm font-medium">{workspace.manifest.branch}</span>
-                  <span className="gap-sm flex flex-wrap items-center text-xs">
+                  <span className="text-body truncate font-medium">
+                    {workspace.manifest.branch}
+                  </span>
+                  <span className="gap-sm text-caption flex flex-wrap items-center">
                     <span data-testid="workspace-agent-kind">
                       {agentLabel(agentKindOf(workspace.manifest.agent_kind))}
                     </span>
@@ -311,11 +313,11 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
       </section>
 
       <section aria-labelledby="project-commits-heading" className="gap-md flex flex-col">
-        <h2 id="project-commits-heading" className="text-lg font-medium">
+        <h2 id="project-commits-heading" className="text-title font-semibold">
           Recent Commits
         </h2>
         {commits.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No recent commits</p>
+          <p className="text-muted-foreground text-body">No recent commits</p>
         ) : (
           <ul className="gap-sm flex flex-col">
             {commits.map((commit) => (
@@ -330,7 +332,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
         className="gap-md flex flex-col"
         data-testid="project-settings"
       >
-        <h2 id="project-settings-heading" className="text-lg font-medium">
+        <h2 id="project-settings-heading" className="text-title font-semibold">
           <button
             type="button"
             aria-expanded={settingsOpen}
@@ -366,7 +368,7 @@ export function ProjectPage({ id, tasks }: ProjectPageProps) {
 function PullRequestLine({ pr }: { pr: PullRequestRow }) {
   const url = httpsUrl(pr.url);
   return (
-    <li className="gap-xs flex flex-col text-sm">
+    <li className="gap-xs text-body flex flex-col">
       <div className="gap-sm flex flex-wrap items-center">
         {url ? (
           <a
@@ -383,7 +385,7 @@ function PullRequestLine({ pr }: { pr: PullRequestRow }) {
         {pr.is_mainloop ? <StatusBadge label="Mainloop" tone="active" /> : null}
         <span className="break-words">{pr.title}</span>
       </div>
-      <span className="text-muted-foreground text-xs">
+      <span className="text-muted-foreground text-caption">
         by {pr.author} ·{' '}
         <time dateTime={pr.created_at}>{new Date(pr.created_at).toLocaleDateString()}</time>
       </span>
@@ -394,9 +396,9 @@ function PullRequestLine({ pr }: { pr: PullRequestRow }) {
 function CommitLine({ commit }: { commit: CommitRow }) {
   const url = httpsUrl(commit.url);
   return (
-    <li className="gap-xs flex flex-col text-sm">
+    <li className="gap-xs text-body flex flex-col">
       <span className="break-words">{commitTitle(commit.message)}</span>
-      <span className="text-muted-foreground gap-sm flex flex-wrap text-xs">
+      <span className="text-muted-foreground gap-sm text-caption flex flex-wrap">
         <span>{commit.author}</span>
         <time dateTime={commit.date}>{new Date(commit.date).toLocaleDateString()}</time>
         {url ? (
@@ -404,12 +406,12 @@ function CommitLine({ commit }: { commit: CommitRow }) {
             href={url}
             target="_blank"
             rel="noopener noreferrer"
-            className="min-h-control min-w-control inline-flex items-center justify-center underline"
+            className="min-h-control min-w-control inline-flex items-center justify-center font-mono underline"
           >
             {commit.sha.slice(0, 7)}
           </a>
         ) : (
-          <span>{commit.sha.slice(0, 7)}</span>
+          <span className="font-mono">{commit.sha.slice(0, 7)}</span>
         )}
       </span>
     </li>

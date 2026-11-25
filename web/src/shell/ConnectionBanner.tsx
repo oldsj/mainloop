@@ -37,7 +37,7 @@ export function ConnectionBanner({
       <div
         role="status"
         data-testid="signin-banner"
-        className="gap-sm border-border bg-destructive px-md py-sm text-destructive-foreground flex shrink-0 items-center border-b text-sm"
+        className="gap-sm border-border bg-destructive px-md py-sm text-destructive-foreground text-body flex shrink-0 items-center border-b"
       >
         <LogIn className="size-4 shrink-0" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate">Signed out</span>
@@ -56,7 +56,7 @@ export function ConnectionBanner({
     <div
       role="status"
       data-testid="connection-banner"
-      className="gap-sm border-border bg-destructive px-md py-sm text-destructive-foreground flex shrink-0 items-center border-b text-sm"
+      className="gap-sm border-border bg-destructive px-md py-sm text-destructive-foreground text-body flex shrink-0 items-center border-b"
     >
       <WifiOff className="size-4 shrink-0" aria-hidden="true" />
       <span className="min-w-0 truncate">Offline{since(state.offlineSince)} · reconnecting…</span>

@@ -15,10 +15,10 @@ export function WorkspaceManifest({ workspace }: { workspace: WorkspaceLifecycle
 
   return (
     <section aria-labelledby="manifest-heading" className="gap-sm flex flex-col">
-      <h2 id="manifest-heading" className="text-base font-medium">
+      <h2 id="manifest-heading" className="text-title font-semibold">
         Manifest
       </h2>
-      <dl className="gap-sm flex flex-col text-sm">
+      <dl className="gap-sm text-body flex flex-col">
         <Fact label="Repository">
           {manifest.repo_url === '' ? (
             'Not declared'
@@ -56,7 +56,7 @@ export function WorkspaceManifest({ workspace }: { workspace: WorkspaceLifecycle
         </Fact>
       </dl>
       {dropped > 0 ? (
-        <p role="status" className="text-muted-foreground text-xs">
+        <p role="status" className="text-muted-foreground text-caption">
           {dropped === 1
             ? 'One declared port could not be read and is not listed.'
             : `${dropped} declared ports could not be read and are not listed.`}

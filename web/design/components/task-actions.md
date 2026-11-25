@@ -9,8 +9,8 @@ The owner's actions on one task: Retry, Reassign and Cancel, and on a task that 
 ## Tokens
 
 - Buttons: the shared button, in one row, the actions that move the task on first. The first of them is the primary (filled) button: Retry when the server offers it, else **I fixed it, retry**. The rest use the outline style. Cancel is last, an outline button with `text-destructive`; the filled destructive style is kept for its confirmation, so a red button is never the first thing on a task that needs the owner.
-- Notices: info `text-term-green`, warn `text-term-yellow`, error `text-destructive`. The notice is a plain block with `gap-xs`, `text-sm`.
-- Resend panel: `border-term-yellow/50` on its edge, with the original request's version, attempt and target in `text-xs`.
+- Notices: info `text-term-green`, warn `text-term-yellow`, error `text-destructive`. The notice is a plain block with `gap-xs`, `text-body`.
+- Resend panel: `border-term-yellow/50` on its edge, with the original request's version, attempt and target in `text-caption`.
 - Radius `rounded-none`. Tokens only.
 
 ## States

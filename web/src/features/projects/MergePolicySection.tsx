@@ -52,12 +52,12 @@ export function MergePolicySection({ projectId }: { projectId: string }) {
       className="gap-md p-md border-border flex flex-col border"
       data-testid="merge-policy"
     >
-      <h3 id="merge-policy-heading" className="text-lg font-medium">
+      <h3 id="merge-policy-heading" className="text-title font-semibold">
         Merge policy
       </h3>
 
       {policy.isPending ? (
-        <p role="status" className="text-muted-foreground text-sm">
+        <p role="status" className="text-muted-foreground text-body">
           Loading merge policy…
         </p>
       ) : null}
@@ -140,11 +140,11 @@ function PolicyForm({
 
   return (
     <div className="gap-md flex flex-col">
-      <p className="text-sm">{policyText(view)}</p>
-      <p className="text-muted-foreground text-sm">{POLICY_EXPLANATION}</p>
+      <p className="text-body">{policyText(view)}</p>
+      <p className="text-muted-foreground text-body">{POLICY_EXPLANATION}</p>
 
       {!view.writes_enabled ? (
-        <p className="text-term-yellow text-sm">
+        <p className="text-term-yellow text-body">
           Editing disabled by the server. The current policy remains in effect.
         </p>
       ) : null}
@@ -156,11 +156,11 @@ function PolicyForm({
           if (canSave) onSave(draft);
         }}
       >
-        <label className="gap-xs flex flex-col text-sm">
+        <label className="gap-xs text-body flex flex-col">
           Policy
           <select
             aria-label="Policy"
-            className="border-border bg-background text-foreground px-md min-h-control border text-sm"
+            className="border-border bg-background text-foreground px-md min-h-control text-field border"
             value={draft}
             disabled={!editable}
             onChange={(event) => setDraft(event.target.value as MergePolicy)}
@@ -172,7 +172,7 @@ function PolicyForm({
 
         {saveError ? (
           <div role="alert" className="gap-sm flex flex-col">
-            <p className="text-destructive text-sm">
+            <p className="text-destructive text-body">
               {saveError}. Review the current policy before saving again.
             </p>
             <div>
@@ -188,14 +188,14 @@ function PolicyForm({
         </Button>
       </form>
 
-      <details className="text-sm">
+      <details className="text-body">
         <summary className="py-sm min-h-control cursor-pointer">
           Protected paths (read-only)
         </summary>
         <ul className="gap-xs pt-sm flex flex-col">
           {view.protected_globs.map((glob) => (
             <li key={glob}>
-              <code className="text-xs break-all">{glob}</code>
+              <code className="text-caption font-mono break-all">{glob}</code>
             </li>
           ))}
         </ul>

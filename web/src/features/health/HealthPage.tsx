@@ -110,7 +110,7 @@ export function HealthPage({ search }: { search: HealthSearch }) {
           aria-expanded={open}
           aria-controls="health-filters"
           onClick={() => setToggle({ wide, open: !open })}
-          className="min-h-control text-sm"
+          className="min-h-control text-body"
         >
           Filters · {windowSummary(hours)}
         </button>
@@ -161,7 +161,7 @@ export function HealthPage({ search }: { search: HealthSearch }) {
 
       {view ? (
         <>
-          <p className="text-muted-foreground max-w-prose text-sm">{COVERAGE_NOTE}</p>
+          <p className="text-muted-foreground text-body max-w-prose">{COVERAGE_NOTE}</p>
           {view.partial ? (
             <p role="status" className="text-term-yellow">
               {PARTIAL_NOTICE}
@@ -180,8 +180,8 @@ export function HealthPage({ search }: { search: HealthSearch }) {
           {view.stops.length > 0 || view.unreadableStops > 0 ? (
             <section aria-label="Unconfirmed stops" className="gap-sm grid">
               <h2 className="text-term-yellow font-medium">Unconfirmed stops</h2>
-              <p className="text-muted-foreground max-w-prose text-sm">{STOPS_NOTE}</p>
-              <ul className="gap-xs grid text-xs break-words">
+              <p className="text-muted-foreground text-body max-w-prose">{STOPS_NOTE}</p>
+              <ul className="gap-xs text-caption grid font-mono break-words">
                 {view.stops.map((stop) => (
                   <li key={stop.attempt_id}>{stopText(stop)}</li>
                 ))}
@@ -196,8 +196,8 @@ export function HealthPage({ search }: { search: HealthSearch }) {
           {view.stalls.length > 0 || view.unreadableStalls > 0 ? (
             <section aria-label="Stalled turns" className="gap-sm grid">
               <h2 className="text-term-yellow font-medium">Stalled turns</h2>
-              <p className="text-muted-foreground max-w-prose text-sm">{STALLS_NOTE}</p>
-              <ul className="gap-xs grid text-xs break-words">
+              <p className="text-muted-foreground text-body max-w-prose">{STALLS_NOTE}</p>
+              <ul className="gap-xs text-caption grid font-mono break-words">
                 {view.stalls.map((stall) => (
                   <li key={stall.message_id}>{stallText(stall)}</li>
                 ))}
@@ -221,7 +221,7 @@ export function HealthPage({ search }: { search: HealthSearch }) {
             ))}
           </ul>
 
-          <p className="text-muted-foreground text-xs">{retentionText(view.retention)}</p>
+          <p className="text-muted-foreground text-caption">{retentionText(view.retention)}</p>
         </>
       ) : null}
     </article>

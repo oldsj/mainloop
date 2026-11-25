@@ -113,10 +113,10 @@ export function TaskPage({ id }: { id: string }) {
             />
           </span>
         </div>
-        <h1 className="text-lg font-medium break-words">{view.task.title}</h1>
+        <h1 className="text-display font-semibold break-words">{view.task.title}</h1>
         <TaskMeta view={view} />
         {parentId ? (
-          <p className="text-sm">
+          <p className="text-body">
             Child of{' '}
             <Link
               to="/tasks/$id"
@@ -134,7 +134,7 @@ export function TaskPage({ id }: { id: string }) {
         // A failed refresh keeps the last view on screen and says so; only a successful read clears it.
         <div
           role="alert"
-          className="gap-sm p-md border-term-yellow/50 flex flex-wrap items-center border-b text-sm"
+          className="gap-sm p-md border-term-yellow/50 text-body flex flex-wrap items-center border-b"
         >
           <p>Could not refresh this task. Showing the last known state.</p>
           <Button
@@ -150,7 +150,7 @@ export function TaskPage({ id }: { id: string }) {
       ) : null}
 
       {children.isError || parentRead.isError ? (
-        <p role="status" className="px-md pt-sm text-muted-foreground text-xs">
+        <p role="status" className="px-md pt-sm text-muted-foreground text-caption">
           Parent and child tasks could not be loaded.
         </p>
       ) : null}
@@ -176,7 +176,7 @@ export function TaskPage({ id }: { id: string }) {
       <TaskLoops taskId={view.task.id} offline={offline} />
       {view.task.owner_decision ? (
         <details className="border-border-subtle border-t">
-          <summary className="p-md text-muted-foreground min-h-control cursor-pointer text-sm font-medium">
+          <summary className="p-md text-muted-foreground min-h-control text-body cursor-pointer font-medium">
             Task details
           </summary>
           <TaskFacts view={view} />
@@ -207,7 +207,7 @@ function TaskMeta({ view }: { view: TaskView }) {
     </span>
   );
   return (
-    <p className="text-muted-foreground text-xs">
+    <p className="text-muted-foreground text-caption">
       {reason ? (
         <>
           <span data-testid="task-status-reason">{reason}</span>
@@ -245,7 +245,7 @@ function Brief({ text }: { text: string }) {
       <p
         id={id}
         className={cn(
-          'text-muted-foreground text-xs break-words whitespace-pre-wrap',
+          'text-muted-foreground text-caption font-mono break-words whitespace-pre-wrap',
           long && !open && 'line-clamp-2'
         )}
       >
@@ -257,7 +257,7 @@ function Brief({ text }: { text: string }) {
           aria-expanded={open}
           aria-controls={id}
           onClick={() => setOpen((was) => !was)}
-          className="text-muted-foreground hover:text-foreground min-h-control text-xs underline lg:min-h-0"
+          className="text-muted-foreground hover:text-foreground min-h-control text-caption underline lg:min-h-0"
         >
           {open ? 'Show less of the brief' : 'Show the whole brief'}
         </button>
@@ -276,13 +276,13 @@ function OwnerAskBanner({ action }: { action: string }) {
       aria-labelledby="owner-ask-heading"
       className="gap-xs p-md border-status-attention flex flex-col border-l-2"
     >
-      <p className="text-muted-foreground text-2xs font-medium tracking-wide uppercase">
+      <p className="text-muted-foreground text-label font-medium tracking-wide uppercase">
         Needs you
       </p>
       <h2
         id="owner-ask-heading"
         data-testid="task-owner-ask"
-        className="text-sm font-medium break-words"
+        className="text-body font-medium break-words"
       >
         {action}
       </h2>
@@ -309,13 +309,13 @@ function PublicationBanner({ view }: { view: TaskView }) {
     >
       <h2
         id="publication-ask-heading"
-        className="text-muted-foreground text-2xs font-medium tracking-wide uppercase"
+        className="text-muted-foreground text-label font-medium tracking-wide uppercase"
       >
         {ask.needsOwner ? 'Needs you' : 'Waiting on its pull request'}
       </h2>
-      <p className="text-sm break-words">{ask.text}</p>
+      <p className="text-body break-words">{ask.text}</p>
       {ask.prUrl ? (
-        <p className="text-sm">
+        <p className="text-body">
           <a
             href={ask.prUrl}
             target="_blank"
@@ -359,8 +359,8 @@ function TaskFailure({
   if (failure === 'not-found') {
     return (
       <section data-testid="task-not-found" className="gap-md p-md flex flex-col">
-        <h1 className="text-lg font-medium">Task not found</h1>
-        <p className="text-muted-foreground text-sm">
+        <h1 className="text-display font-semibold">Task not found</h1>
+        <p className="text-muted-foreground text-body">
           It doesn&apos;t exist, or you don&apos;t have access to it.
         </p>
         <div>

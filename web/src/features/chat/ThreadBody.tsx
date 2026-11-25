@@ -103,7 +103,10 @@ export function ThreadBody({
         </div>
       ) : null}
       {thread.conversationFailed && thread.loaded ? (
-        <p className={cn('text-muted-foreground px-md py-xs text-xs', CONVERSATION)} role="status">
+        <p
+          className={cn('text-muted-foreground px-md py-xs text-caption', CONVERSATION)}
+          role="status"
+        >
           Could not refresh the conversation. Showing the last messages.
         </p>
       ) : null}
@@ -125,7 +128,7 @@ export function ThreadBody({
       {thread.sendError ? (
         <p
           className={cn(
-            'text-destructive px-md py-xs shrink-0 text-sm [overflow-wrap:anywhere]',
+            'text-destructive px-md py-xs text-body shrink-0 [overflow-wrap:anywhere]',
             CONVERSATION
           )}
           role="alert"
@@ -136,7 +139,7 @@ export function ThreadBody({
       ) : null}
       {thread.stopError ? (
         <p
-          className={cn('text-destructive px-md py-xs shrink-0 text-sm', CONVERSATION)}
+          className={cn('text-destructive px-md py-xs text-body shrink-0', CONVERSATION)}
           role="alert"
         >
           {thread.stopError}
@@ -148,7 +151,7 @@ export function ThreadBody({
 
       {closedReason ? (
         <p
-          className={cn('text-muted-foreground px-md py-xs shrink-0 text-sm', CONVERSATION)}
+          className={cn('text-muted-foreground px-md py-xs text-body shrink-0', CONVERSATION)}
           role="status"
         >
           {closedReason}
@@ -157,7 +160,7 @@ export function ThreadBody({
       {commandNotice ? (
         <p
           className={cn(
-            'text-muted-foreground px-md py-xs shrink-0 text-sm whitespace-pre-line',
+            'text-muted-foreground px-md py-xs text-body shrink-0 whitespace-pre-line',
             CONVERSATION
           )}
           role="status"

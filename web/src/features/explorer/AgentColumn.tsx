@@ -36,7 +36,7 @@ const ROW_BUTTON =
   'text-muted-foreground hover:text-foreground px-xs min-h-control focus-visible:ring-ring inline-flex cursor-default items-center outline-none focus-visible:ring-1 focus-visible:ring-inset';
 
 /** A list's name: lowercase and muted, with no rule or box around it. */
-const LABEL = 'text-muted-foreground px-sm text-xs font-normal lowercase';
+const LABEL = 'text-muted-foreground px-sm text-caption font-normal lowercase';
 
 export interface AgentColumnProps {
   model: AgentColumnModel;
@@ -251,7 +251,7 @@ export function AgentColumn({
             <span
               data-testid="agent-meta"
               title={opts.meta}
-              className={cn('text-muted-foreground flex min-w-0 text-xs', ON_ROW)}
+              className={cn('text-muted-foreground text-caption flex min-w-0', ON_ROW)}
             >
               {opts.meta ? <span className="min-w-0 truncate">{opts.meta}</span> : null}
               {opts.age ? (
@@ -285,7 +285,7 @@ export function AgentColumn({
     <section
       aria-label="Spaces and agents"
       data-testid="agent-column"
-      className="text-ui flex min-h-0 flex-1 flex-col"
+      className="text-body flex min-h-0 flex-1 flex-col"
     >
       {/* As tall as the tab strip beside it, rule included, so the two first rows line up. */}
       <header className="pr-xs min-h-control box-content flex shrink-0 items-center justify-between border-b border-transparent">
@@ -296,7 +296,7 @@ export function AgentColumn({
       </header>
       <div className="pb-sm min-h-0 flex-1 overflow-y-auto">
         {failed ? (
-          <p role="alert" className="px-sm py-sm text-term-red text-sm">
+          <p role="alert" className="px-sm py-sm text-term-red text-body">
             Couldn’t load the agents. They fill in when the next read succeeds.
           </p>
         ) : !ready ? (
@@ -329,7 +329,7 @@ export function AgentColumn({
           // everything else. The Inbox and its count are on the activity bar (the phone's bottom bar).
           <div
             data-testid="column-actions"
-            className="px-xs mt-sm flex items-center justify-between text-xs"
+            className="px-xs mt-sm text-caption flex items-center justify-between"
           >
             <button
               type="button"
@@ -369,7 +369,7 @@ export function AgentColumn({
                   <h3
                     id={`agents-in-${group.id}`}
                     data-testid="agent-space"
-                    className="text-muted-foreground px-sm pt-xs truncate text-xs font-normal"
+                    className="text-muted-foreground px-sm pt-xs text-caption truncate font-normal"
                   >
                     {group.label}
                   </h3>

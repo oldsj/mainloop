@@ -9,7 +9,7 @@ The merge policy section on a project page. It shows the current policy, **Auto*
 ## Tokens
 
 - Section `border-border`, padding `p-md`, gap `gap-md`, radius `rounded-none`.
-- Heading `text-lg font-medium`. Policy line and controls `text-sm`. Explanation `text-muted-foreground`.
+- Heading `text-title font-semibold`. Policy line and controls `text-body`. Explanation `text-muted-foreground`.
 - "Editing disabled" notice `text-term-yellow`. Save error `text-destructive`.
 - Select `border-border bg-background`. Save is the primary button.
 

@@ -83,13 +83,13 @@ export function SelectionForm({
       }}
     >
       <fieldset className="gap-md p-md border-border flex flex-col border">
-        <legend className="text-sm font-medium">Draft selection</legend>
+        <legend className="text-body font-medium">Draft selection</legend>
 
-        <label className="gap-xs flex flex-col text-sm">
+        <label className="gap-xs text-body flex flex-col">
           Environment
           <select
             aria-label="Environment"
-            className="border-border bg-background text-foreground px-md min-h-control border text-sm"
+            className="border-border bg-background text-foreground px-md min-h-control text-field border"
             value={draft.environmentId}
             onChange={(event) =>
               setDraft({ ...draft, environmentId: event.target.value, versionId: '' })
@@ -104,7 +104,7 @@ export function SelectionForm({
           </select>
         </label>
 
-        <label className="gap-sm min-h-control flex items-center text-sm">
+        <label className="gap-sm min-h-control text-body flex items-center">
           <input
             type="checkbox"
             className="size-5"
@@ -115,24 +115,24 @@ export function SelectionForm({
           Follow this environment’s accepted default
         </label>
         {draft.follow && environment ? (
-          <p className="text-muted-foreground text-xs">
+          <p className="text-muted-foreground text-caption">
             Accepted default: {environment.accepted_default_version_id ?? 'None'}. Future accepted
             defaults also apply to new sessions.
           </p>
         ) : null}
         {/* Until a fresh read lands, an empty list would wrongly read as "no accepted default". */}
         {read?.ready && needsAcceptedDefault(draft, environment, candidates) ? (
-          <p className="text-term-yellow text-sm">
+          <p className="text-term-yellow text-body">
             An accepted current-policy version is required. Uncheck follow-default, choose a
             validated version, then accept it below.
           </p>
         ) : null}
 
-        <label className="gap-xs flex flex-col text-sm">
+        <label className="gap-xs text-body flex flex-col">
           Version
           <select
             aria-label="Version"
-            className="border-border bg-background text-foreground px-md min-h-control border text-sm"
+            className="border-border bg-background text-foreground px-md min-h-control text-field border"
             value={draft.versionId}
             disabled={draft.follow || !draft.environmentId}
             onChange={(event) => setDraft({ ...draft, versionId: event.target.value })}
@@ -146,12 +146,12 @@ export function SelectionForm({
           </select>
         </label>
         {read?.loading && !read.ready && !read.failure ? (
-          <p role="status" className="text-muted-foreground text-xs">
+          <p role="status" className="text-muted-foreground text-caption">
             Loading versions…
           </p>
         ) : null}
         {read?.failure ? (
-          <div role="alert" className="gap-xs flex flex-col text-sm">
+          <div role="alert" className="gap-xs text-body flex flex-col">
             <p className="text-destructive">
               {read.failure}
               {candidates.length > 0 ? ' Showing the last loaded versions.' : ''}
@@ -177,11 +177,11 @@ export function SelectionForm({
           >
             {accepting ? 'Accepting…' : 'Accept selected version as environment default'}
           </Button>
-          <p className="text-muted-foreground text-xs">
+          <p className="text-muted-foreground text-caption">
             This changes the default for every project following this environment.
           </p>
           {acceptError ? (
-            <p role="alert" className="text-destructive text-sm">
+            <p role="alert" className="text-destructive text-body">
               {acceptError}
             </p>
           ) : null}
@@ -189,7 +189,7 @@ export function SelectionForm({
       ) : null}
 
       {saveError ? (
-        <p role="alert" className="text-destructive text-sm">
+        <p role="alert" className="text-destructive text-body">
           {saveError}
         </p>
       ) : null}

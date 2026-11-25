@@ -46,7 +46,7 @@ const components: Components = {
   img: ({ alt }) => <>{alt}</>,
   p: ({ children }) => <p className="mb-sm last:mb-0">{children}</p>,
   code: ({ children }) => (
-    <code className="bg-background border-border px-xs border text-xs break-words">{children}</code>
+    <code className="bg-background border-border px-xs border break-words">{children}</code>
   ),
   pre: ({ children }) => (
     <pre className="bg-background border-border p-sm my-sm border break-words whitespace-pre-wrap [&_code]:border-0 [&_code]:bg-transparent [&_code]:p-0">
@@ -63,12 +63,18 @@ const components: Components = {
       {children}
     </blockquote>
   ),
-  h1: ({ children }) => <h1 className="text-foreground my-sm text-lg font-semibold">{children}</h1>,
-  h2: ({ children }) => (
-    <h2 className="text-foreground my-sm text-base font-semibold">{children}</h2>
+  h1: ({ children }) => (
+    <h1 className="text-foreground my-sm text-title font-semibold">{children}</h1>
   ),
-  h3: ({ children }) => <h3 className="text-foreground my-sm text-sm font-semibold">{children}</h3>,
-  h4: ({ children }) => <h4 className="text-foreground my-sm text-sm font-semibold">{children}</h4>,
+  h2: ({ children }) => (
+    <h2 className="text-foreground my-sm text-body font-semibold">{children}</h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="text-foreground my-sm text-body font-semibold">{children}</h3>
+  ),
+  h4: ({ children }) => (
+    <h4 className="text-foreground my-sm text-body font-semibold">{children}</h4>
+  ),
   hr: () => <hr className="border-border my-md border-0 border-t" />,
   // A wide table scrolls inside the message instead of stretching the page.
   table: ({ children }) => (

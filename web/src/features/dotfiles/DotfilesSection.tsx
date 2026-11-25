@@ -17,7 +17,7 @@ import {
 } from './queries';
 
 const FIELD =
-  'border-input bg-background text-foreground px-sm min-h-control text-ui w-full min-w-0 border disabled:opacity-50';
+  'border-input bg-background text-foreground px-sm min-h-control text-field w-full min-w-0 border disabled:opacity-50';
 
 /** What a failed save says: a stale version asks for a reload, else the server's own sentence. */
 function saveError(error: unknown): string {
@@ -38,10 +38,10 @@ export function OwnerDotfilesSection() {
       data-testid="dotfiles"
     >
       <div className="gap-xs flex flex-col">
-        <h2 id="dotfiles-heading" className="text-base font-semibold">
+        <h2 id="dotfiles-heading" className="text-title font-semibold">
           Agent dotfiles
         </h2>
-        <p className="text-muted-foreground max-w-measure text-sm">
+        <p className="text-muted-foreground max-w-measure text-body">
           A GitHub repository directory whose <code>AGENTS.md</code>, skills, subagents and commands
           every agent session gets as its own user-level files, read-only. A project can set its
           own. New sessions pin the commit; running ones keep theirs.
@@ -73,7 +73,7 @@ export function ProjectDotfilesSection({ projectId }: { projectId: string }) {
       className="gap-md p-md border-border flex flex-col border"
       data-testid="dotfiles"
     >
-      <h3 id="project-dotfiles-heading" className="text-lg font-medium">
+      <h3 id="project-dotfiles-heading" className="text-title font-semibold">
         Agent dotfiles
       </h3>
       <SourceBody
@@ -125,7 +125,7 @@ function SourceBody({ read, busy, error, onSave, clearLabel, unset }: SourceBody
   }
   if (read.data === undefined) {
     return (
-      <p role="status" className="text-muted-foreground text-sm">
+      <p role="status" className="text-muted-foreground text-body">
         Loading dotfiles source…
       </p>
     );
@@ -180,7 +180,7 @@ function SourceForm({ source, busy, error, onSave, clearLabel, unset }: SourceFo
   return (
     <div className="gap-md flex flex-col">
       {text ? (
-        <p className="text-sm" data-testid="dotfiles-current">
+        <p className="text-body" data-testid="dotfiles-current">
           Current:{' '}
           {link ? (
             <a href={link} target="_blank" rel="noopener noreferrer" className="underline">
@@ -191,7 +191,7 @@ function SourceForm({ source, busy, error, onSave, clearLabel, unset }: SourceFo
           )}
         </p>
       ) : (
-        <p className="text-muted-foreground text-sm" data-testid="dotfiles-current">
+        <p className="text-muted-foreground text-body" data-testid="dotfiles-current">
           {unset ?? 'No source is set: sessions get no dotfiles.'}
         </p>
       )}
@@ -203,7 +203,7 @@ function SourceForm({ source, busy, error, onSave, clearLabel, unset }: SourceFo
           onSave({ repository: trimmed, ref: ref.trim(), path: path.trim() }, source.version);
         }}
       >
-        <label htmlFor={`${id}-repo`} className="gap-xs flex flex-col text-sm">
+        <label htmlFor={`${id}-repo`} className="gap-xs text-body flex flex-col">
           Repository
           <input
             id={`${id}-repo`}
@@ -218,9 +218,9 @@ function SourceForm({ source, busy, error, onSave, clearLabel, unset }: SourceFo
           />
         </label>
         {invalid ? (
-          <p className="text-destructive text-sm">Write the repository as owner/name.</p>
+          <p className="text-destructive text-body">Write the repository as owner/name.</p>
         ) : null}
-        <label htmlFor={`${id}-ref`} className="gap-xs flex flex-col text-sm">
+        <label htmlFor={`${id}-ref`} className="gap-xs text-body flex flex-col">
           Branch, tag or commit
           <input
             id={`${id}-ref`}
@@ -233,7 +233,7 @@ function SourceForm({ source, busy, error, onSave, clearLabel, unset }: SourceFo
             onChange={(event) => setRef(event.target.value)}
           />
         </label>
-        <label htmlFor={`${id}-path`} className="gap-xs flex flex-col text-sm">
+        <label htmlFor={`${id}-path`} className="gap-xs text-body flex flex-col">
           Directory
           <input
             id={`${id}-path`}
@@ -247,7 +247,7 @@ function SourceForm({ source, busy, error, onSave, clearLabel, unset }: SourceFo
           />
         </label>
         {error ? (
-          <p role="alert" className="text-destructive text-sm">
+          <p role="alert" className="text-destructive text-body">
             {error}
           </p>
         ) : null}

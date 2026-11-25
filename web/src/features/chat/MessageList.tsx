@@ -152,7 +152,7 @@ export function MessageList({
             className="gap-sm flex flex-1 flex-col"
           >
             {messages.length === 0 && !live ? (
-              <div className="gap-md m-auto flex flex-col items-center text-center text-sm">
+              <div className="gap-md text-body m-auto flex flex-col items-center text-center">
                 <p className="text-muted-foreground">
                   {loaded ? 'No messages yet.' : 'Connecting. Waiting for the backend…'}
                 </p>

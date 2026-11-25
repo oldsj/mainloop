@@ -43,7 +43,7 @@ export function InboxPanel({
         <div className="gap-xs flex items-center">
           {back}
           {/* The answer view is a page of its own, so this is the page's heading. */}
-          <h1 id="inbox-heading" className="text-sm font-medium">
+          <h1 id="inbox-heading" className="text-body font-medium">
             Inbox
           </h1>
         </div>

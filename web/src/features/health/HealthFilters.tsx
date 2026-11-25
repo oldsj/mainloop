@@ -124,7 +124,7 @@ export function HealthFilters({
 }
 
 const SELECT_CLASS =
-  'bg-background border-border text-foreground p-sm mt-xs min-h-control w-full border text-sm rounded-none';
+  'bg-background border-border text-foreground p-sm mt-xs min-h-control w-full border text-field rounded-none';
 
 /** A label beside its select. The label is not wrapped around the select, so its name is just the label text. */
 function SelectField({
@@ -140,7 +140,7 @@ function SelectField({
 }) {
   const id = useId();
   return (
-    <div className="text-muted-foreground text-xs">
+    <div className="text-muted-foreground text-caption">
       <label htmlFor={id}>{label}</label>
       <select
         id={id}

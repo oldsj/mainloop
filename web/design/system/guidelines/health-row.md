@@ -9,7 +9,7 @@ One task group on the health page. Collapsed, it shows the task title, the cover
 ## Tokens
 
 - The summary is one button, at least 44 px tall, with `text-left`. Title `font-medium`.
-- Counts use `tabular-nums`. Metadata uses `text-muted-foreground text-xs`.
+- Counts use `tabular-nums`. Metadata uses `text-muted-foreground text-caption`.
 - Gap notes use `text-term-yellow`.
 - Links use `text-foreground` with an underline.
 - Radius `rounded-none`.

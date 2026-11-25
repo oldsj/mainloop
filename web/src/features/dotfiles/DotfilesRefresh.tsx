@@ -33,7 +33,7 @@ export function DotfilesRefreshView({
   return (
     <div
       data-testid="dotfiles-hint"
-      className="gap-sm px-md py-xs text-muted-foreground flex flex-wrap items-center text-xs"
+      className="gap-sm px-md py-xs text-muted-foreground text-caption flex flex-wrap items-center font-mono"
     >
       {hint ? (
         <>

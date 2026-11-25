@@ -58,7 +58,7 @@ export function ProviderChoice({ info, provider, onDone }: ProviderChoiceProps) 
               setAsking(selectionIsNoop(option.value, info.provider) ? null : option.value)
             }
             className={cn(
-              'border-border-subtle hover:bg-accent min-h-control border-l text-xs first:border-l-0 disabled:pointer-events-none disabled:opacity-50',
+              'border-border-subtle hover:bg-accent min-h-control text-caption border-l first:border-l-0 disabled:pointer-events-none disabled:opacity-50',
               desired === option.value && 'bg-term-selection'
             )}
             data-testid={`provider-option-${option.value}`}
@@ -68,7 +68,7 @@ export function ProviderChoice({ info, provider, onDone }: ProviderChoiceProps) 
         ))}
       </div>
       {held ? (
-        <p className="text-muted-foreground text-xs" data-testid="provider-held">
+        <p className="text-muted-foreground text-caption" data-testid="provider-held">
           The provider cannot change right now. It is held while the main thread has open work, a
           switch is settling, or the app is offline.
         </p>
@@ -80,7 +80,7 @@ export function ProviderChoice({ info, provider, onDone }: ProviderChoiceProps) 
           className="border-status-attention/50 p-sm gap-sm flex flex-col border"
           data-testid="provider-confirm"
         >
-          <p className="text-xs">
+          <p className="text-caption">
             Switching to {providerLabel(confirming)} starts a fresh native session. Your
             conversation, tasks and earlier native history are kept.
           </p>
@@ -124,7 +124,7 @@ export function ChatControls({ info, provider }: Omit<ProviderChoiceProps, 'onDo
       data-testid="session-controls"
     >
       <ProviderChoice info={info} provider={provider} onDone={() => setOpen(false)} />
-      <p className="text-muted-foreground text-xs">
+      <p className="text-muted-foreground text-caption">
         Model and effort: type <code>/model</code> or <code>/effort</code>.
       </p>
       {info.native ? <WebFetchSection sessionId={info.native.session_id} /> : null}

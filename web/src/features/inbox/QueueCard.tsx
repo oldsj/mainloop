@@ -78,9 +78,9 @@ export function QueueCard({ item }: { item: QueueItem }) {
       <header className="gap-sm flex items-start justify-between">
         <div className="gap-sm flex min-w-0 items-center">
           <Icon aria-hidden className="text-muted-foreground size-4 shrink-0" />
-          <h2 className="text-sm font-medium break-words">{item.title}</h2>
+          <h2 className="text-body font-medium break-words">{item.title}</h2>
         </div>
-        <time dateTime={item.created_at} className="text-muted-foreground shrink-0 text-xs">
+        <time dateTime={item.created_at} className="text-muted-foreground text-caption shrink-0">
           {ageLabel(item.created_at)}
         </time>
       </header>
@@ -97,13 +97,13 @@ export function QueueCard({ item }: { item: QueueItem }) {
             {planOpen ? 'Hide plan' : 'View plan'}
           </Button>
           {planOpen ? (
-            <pre className="border-border bg-card text-foreground p-md border text-xs break-words whitespace-pre-wrap">
+            <pre className="border-border bg-card text-foreground p-md text-caption border break-words whitespace-pre-wrap">
               {item.content}
             </pre>
           ) : null}
         </div>
       ) : (
-        <p className="text-muted-foreground text-sm break-words whitespace-pre-wrap">
+        <p className="text-muted-foreground text-body break-words whitespace-pre-wrap">
           {item.content}
         </p>
       )}
@@ -113,7 +113,7 @@ export function QueueCard({ item }: { item: QueueItem }) {
           href={pr}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-primary min-h-control inline-flex items-center text-sm underline underline-offset-4"
+          className="text-primary min-h-control text-body inline-flex items-center underline underline-offset-4"
         >
           View PR
         </a>
@@ -161,7 +161,7 @@ export function QueueCard({ item }: { item: QueueItem }) {
                   : 'Type your response...'
             }
             disabled={busy}
-            className="border-input bg-background text-foreground placeholder:text-muted-foreground focus-visible:border-ring min-h-control min-w-0 flex-1 border px-3 text-sm focus-visible:outline-none disabled:opacity-50"
+            className="border-input bg-background text-foreground placeholder:text-muted-foreground focus-visible:border-ring min-h-control text-field min-w-0 flex-1 border px-3 focus-visible:outline-none disabled:opacity-50"
           />
           <Button type="submit" variant="outline" size="sm" disabled={!draft.trim() || busy}>
             Send
@@ -169,16 +169,16 @@ export function QueueCard({ item }: { item: QueueItem }) {
         </form>
       ) : null}
 
-      {answer ? <p className="text-muted-foreground text-sm break-words">&gt; {answer}</p> : null}
+      {answer ? <p className="text-muted-foreground text-body break-words">&gt; {answer}</p> : null}
 
       {native.error ? (
-        <p role="alert" className="text-destructive text-sm">
+        <p role="alert" className="text-destructive text-body">
           {native.error}
         </p>
       ) : null}
 
       {respond.isError ? (
-        <p role="alert" className="text-destructive text-sm">
+        <p role="alert" className="text-destructive text-body">
           {messageOf(respond.error)}
         </p>
       ) : null}
