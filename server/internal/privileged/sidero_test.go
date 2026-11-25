@@ -3,6 +3,7 @@ package privileged_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"fmt"
 	"strings"
 	"testing"
@@ -19,6 +20,14 @@ const runKeyFixture = "c2EtZmljdGlvbmFsLXJ1bi1rZXktOWQ0ZQ=="
 type fakeSidero struct {
 	runs   []privileged.SideroRun
 	handle func(run privileged.SideroRun) privileged.CommandOutput
+	// upgrade answers CheckUpgrade; upgrades records its calls.
+	upgrade  error
+	upgrades []string
+}
+
+func (f *fakeSidero) CheckUpgrade(_ context.Context, cluster string, nodes []string, image string) error {
+	f.upgrades = append(f.upgrades, cluster+" "+strings.Join(nodes, ",")+" "+image)
+	return f.upgrade
 }
 
 func (f *fakeSidero) Run(_ context.Context, run privileged.SideroRun) (privileged.CommandOutput, error) {
@@ -159,11 +168,30 @@ func TestTalosctlRebootRunsOnceWithoutPreview(t *testing.T) {
 // An upgrade to an image the requester names says so on the card: the image runs as the node's
 // operating system.
 func TestTalosctlUpgradeImageIsTagged(t *testing.T) {
-	e, _ := newSideroEnv(t, applyPatch)
+	e, f := newSideroEnv(t, applyPatch)
 	image := "factory.talos.dev/metal-installer/" + strings.Repeat("ab", 32) + ":v1.14.5"
-	a := e.request(t, privileged.TypeTalosctl, "up-1", talosctlArgs("upgrade", "--nodes=192.0.2.11", "--wait=false", "--image="+image))
+	a := e.request(t, privileged.TypeTalosctl, "up-1", talosctlArgs("upgrade", "--nodes=192.0.2.11,node-b", "--wait=false", "--image="+image))
 	_, card := e.preflighted(t, a.ID)
 	cardHas(t, card, "Risk: installs "+image+" as the node's operating system, which then has full control of the node, and reboots it")
+	if want := []string{"test-cluster 192.0.2.11,node-b " + image}; !slices.Equal(f.upgrades, want) {
+		t.Fatalf("upgrade checks = %q, want %q", f.upgrades, want)
+	}
+}
+
+// An upgrade the proxy would refuse is refused before the card, with the proxy's reason.
+func TestTalosctlDoomedUpgradeIsRefusedAtPreflight(t *testing.T) {
+	e, f := newSideroEnv(t, applyPatch)
+	f.upgrade = privileged.Refusal("the image's Talos v1.14.1 is older than machine m-1's v1.14.2: no downgrades (talosctl rollback goes back)")
+	image := "factory.talos.dev/metal-installer/" + strings.Repeat("ab", 32) + ":v1.14.1"
+	a := e.request(t, privileged.TypeTalosctl, "up-1", talosctlArgs("upgrade", "--nodes=192.0.2.11", "--wait=false", "--image="+image))
+	e.runExecutor(t)
+	e.run(t)
+	if a = e.get(t, a.ID); a.State != privileged.StatePreflightFailed || !strings.Contains(deref(a.LastError), "no downgrades") {
+		t.Fatalf("action = %+v (%v)", a, deref(a.LastError))
+	}
+	if f.real() != 0 || len(e.openItems(t)) != 0 {
+		t.Fatalf("runs = %+v", f.runs)
+	}
 }
 
 // Deletes, resets and shutdowns expire in an hour; other commands as any undecided action.
@@ -269,6 +297,10 @@ func TestSideroRequestRefusals(t *testing.T) {
 			"--image takes an installer image with its version"},
 		{privileged.TypeTalosctl, talosctlArgs("upgrade", "--nodes=192.0.2.11", "--wait=false", "--image=ghcr.io/siderolabs/talosctl:v1.14.5"),
 			"--image takes an installer image with its version"},
+		{privileged.TypeTalosctl, talosctlArgs("upgrade", "--nodes=192.0.2.11", "--wait=false",
+			"--image=factory.talos.dev/metal-installer/"+strings.Repeat("ab", 32)+":v1.14.5@sha256:"+strings.Repeat("0", 64)),
+			"--image takes an installer image with its version tag and no digest"},
+		{privileged.TypeTalosctl, talosctlArgs("upgrade", "--nodes=192.0.2.11", "--wait=false"), "talosctl upgrade needs --image="},
 	} {
 		_, err := e.svc.Request(context.Background(), mainSession, tc.typ, jsonArgs(tc.args), "r", fmt.Sprintf("r%d", i))
 		if !errors.Is(err, privileged.ErrInvalid) || !strings.Contains(err.Error(), tc.want) {

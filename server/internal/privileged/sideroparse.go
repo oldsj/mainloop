@@ -268,6 +268,9 @@ func parseSidero(tool string, argv []string) (sideroCommand, error) {
 		if len(c.nodes) == 0 {
 			return c, invalidf("talosctl needs --nodes=<node>[,<node>...]: the executor never picks a node")
 		}
+		if _, ok := c.flags["image"]; c.path == "upgrade" && !ok {
+			return c, invalidf("talosctl upgrade needs --image=<%s>: the executor checks it against the node's schematic and version", installerImageHint)
+		}
 		if c.path == "service" && len(c.words) == 2 && !slices.Contains([]string{"start", "stop", "restart", "status"}, c.words[1]) {
 			return c, invalidf("talosctl service <id> takes start, stop, restart or status")
 		}

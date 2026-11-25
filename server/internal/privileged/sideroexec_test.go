@@ -1,6 +1,7 @@
 package privileged
 
 import (
+	"errors"
 	"bytes"
 	"context"
 	"os/exec"
@@ -99,5 +100,42 @@ func TestSideroRealBinaries(t *testing.T) {
 				t.Errorf("credentials = %d", len(out.Credentials))
 			}
 		})
+	}
+}
+
+// CheckUpgrade is the proxy's upgrade-image check, run before the card: a refusal is the
+// executor's, with the proxy's reason.
+func TestExecSideroCheckUpgrade(t *testing.T) {
+	key, err := pgp.GenerateKey("mainloop-executor", "", "mainloop-executor@serviceaccount.omni.example", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := &serviceaccount.ServiceAccount{Name: "mainloop-executor@serviceaccount.omni.example", Key: key}
+	omni, upstream := startFakeOmni(t, real)
+	omni.reply = testWorld().reply
+	e := ExecSidero{Endpoint: "https://omni.example.com", Key: real, Clusters: []string{"internal-01"}, Upstream: upstream}
+	ctx := context.Background()
+	if err := e.CheckUpgrade(ctx, "internal-01", []string{"192.0.2.11", "node-a"}, factoryImage("ab", "v1.14.5")); err != nil {
+		t.Fatalf("an upgrade to the machine's own installer: %v", err)
+	}
+	for image, want := range map[string]string{
+		factoryImage("cd", "v1.14.5"): "is not machine m-1's",
+		factoryImage("ab", "v1.14.1"): "older than machine m-1's v1.14.2",
+		factoryImage("ab", "v1.14.5") + "@sha256:" + strings.Repeat("0", 64): "no digest",
+	} {
+		err := e.CheckUpgrade(ctx, "internal-01", []string{"192.0.2.11"}, image)
+		var r *refusal
+		if !errors.As(err, &r) || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want a refusal with %q", image, err, want)
+		}
+	}
+	if err := e.CheckUpgrade(ctx, "internal-01", []string{"node-b"}, factoryImage("ab", "v1.14.5")); err == nil ||
+		!strings.Contains(err.Error(), "no Image Factory schematic for machine m-3") {
+		t.Errorf("a machine with no schematic: %v", err)
+	}
+	for _, c := range omni.seen() {
+		if c.method != cosiState+"List" && c.method != cosiState+"Get" {
+			t.Errorf("CheckUpgrade sent %s: it only reads", c.method)
+		}
 	}
 }

@@ -57,7 +57,7 @@ func (p *sideroProxy) check(ctx context.Context, method string, md metadata.MD, 
 		if err != nil {
 			return refusedBy("%s: %v", method, err)
 		}
-		return p.checkUpgradeImage(ctx, md, string(image))
+		return p.checkUpgradeImage(ctx, requestNodes(md), string(image))
 	}
 	return nil
 }
@@ -65,7 +65,7 @@ func (p *sideroProxy) check(ctx context.Context, method string, md metadata.MD, 
 // checkUpgradeImage holds an upgrade to each node's own schematic, as Omni records it, and to a
 // Talos version no older than the one it runs: no other extensions or kernel arguments, and no
 // silent downgrade (talosctl rollback is the way back).
-func (p *sideroProxy) checkUpgradeImage(ctx context.Context, md metadata.MD, image string) error {
+func (p *sideroProxy) checkUpgradeImage(ctx context.Context, nodes []string, image string) error {
 	schematic, version, ok := installerImage(image)
 	if !ok {
 		return refusedBy("the upgrade image is not %s", installerImageHint)
@@ -74,7 +74,10 @@ func (p *sideroProxy) checkUpgradeImage(ctx context.Context, md metadata.MD, ima
 	if err != nil {
 		return err
 	}
-	for _, node := range requestNodes(md) {
+	if len(nodes) == 0 {
+		return refusedBy("the request names no node")
+	}
+	for _, node := range nodes {
 		id, ok := m.machineID(node)
 		if !ok {
 			return refusedBy("node %q is not a machine of cluster %s in Omni", node, p.cluster)
