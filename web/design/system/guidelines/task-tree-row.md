@@ -4,11 +4,11 @@ Source: `docs/specs/tasks.md`.
 
 ## Purpose
 
-One task in the project task tree, on one line. A row shows what the list can say without opening the task: a status dot, the title, the state, and how long ago it changed. Children sit under their parent, stepped in, with a guide line for each level.
+One task in the project task tree, on one line. A row shows what the list can say without opening the task: a status icon, the title, the state, and how long ago it changed. Children sit under their parent, stepped in, with a guide line for each level.
 
 ## Tokens
 
-- Status dot: the shared `StatusDot`, 8 px, in the status language the explorer uses. Amber (`status-working`) while the task works; red (`status-attention`) when it needs the owner; hollow (`status-idle` edge) at rest.
+- Status icon: the shared `StatusIcon`, 14 px, in the status language the sidebar uses: the working ring in `status-working` while the task works; the alert in `status-attention` when it needs the owner; the cross in `status-failed` for a failure; the empty ring in `status-idle` at rest. The indent guides line up under its centre.
 - Title `text-body`, truncated with an ellipsis. State and age `text-muted-foreground text-caption`.
 - Row height is the control height (`min-h-control`). Hover `bg-accent`. No border between rows; a `border-border-subtle` hairline above each top-level task sets it and its children apart from the one before.
 - Indent is 16 px per level, with a 1 px `bg-border` guide line for each level above the row.
@@ -16,7 +16,7 @@ One task in the project task tree, on one line. A row shows what the list can sa
 
 ## States
 
-- **Normal:** dot, title, state, age. The state is the status and its reason (`Running`, `Blocked · awaiting your decision`), then any open operation's summary, then CI when it is known.
+- **Normal:** icon, title, state, age. The state is the status and its reason (`Running`, `Blocked · awaiting your decision`), then any open operation's summary, then CI when it is known.
 - **CI:** `CI passing`, `CI failing` or `CI running` only when the PR head, CI head and observation agree and are fresh, and the task is not finished. In every other case the row says nothing about CI. It never reads "CI unknown", and a finished task never mentions CI.
 - **Detached:** the parent is not in the list, so the row is at the top level and its state ends `child of a task not shown here`. A filtered list never hides work.
 - **Supervisor:** the task is a coordination task. Its state starts with the plain word `supervisor`. No tag, no brackets.
@@ -26,7 +26,7 @@ One task in the project task tree, on one line. A row shows what the list can sa
 
 - The whole row is one link to the task. The link's name is the row's text, so the title is the first thing read, then the state and the age.
 - Focus shows the link's own focus ring. Do not add a second focus target inside the row.
-- The dot is decoration (`aria-hidden`): the state is always in words.
+- The icon is decoration (`aria-hidden`): the state is always in words.
 
 ## Touch
 
@@ -42,7 +42,7 @@ One task in the project task tree, on one line. A row shows what the list can sa
 
 ## Do
 
-- Use the shared `StatusDot`, so the dot means the same here as in the explorer.
+- Use the shared `StatusIcon`, so the icon means the same here as in the sidebar and the tabs.
 - Keep the CI decision in `publicationFacts`, not in the row.
 - Keep the row to one line.
 

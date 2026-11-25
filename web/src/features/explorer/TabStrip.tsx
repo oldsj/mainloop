@@ -1,6 +1,6 @@
 import { Plus } from 'lucide-react';
 import { useEffect, useRef, type ReactNode } from 'react';
-import { StatusDot } from '@/components/shared/status-dot';
+import { StatusIcon } from '@/components/shared/status-icon';
 import { cn } from '@/components/ui/cn';
 import { loadingTabs, newLabel, newTaskPrefill, spaceTabs, type AgentColumnModel } from './agents';
 import type { Target } from './model';
@@ -33,7 +33,8 @@ export interface TabStripProps {
 
 /**
  * The strip over the page, as a terminal workspace manager draws it: one tab per agent in the
- * current space, the lit one filled, and a "+" at the end. A tab is a status dot and a name. The
+ * current space, the lit one on the page's surface, and a "+" at the end. A tab is a status icon and a
+ * name. The
  * tabs scroll sideways when they do not fit, with the lit tab kept in view; a control before or
  * after them stays where it is.
  *
@@ -93,12 +94,14 @@ export function TabStrip({
               className={cn(
                 TAB,
                 tab.current
-                  ? // A hollow dot takes the tab's own text colour, so it shows on the fill.
-                    'bg-primary text-primary-foreground focus-visible:ring-foreground [&_[data-tone=muted]]:border-current'
-                  : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring'
+                  ? // The page's surface, set off from the strip, with a rule along its top.
+                    'bg-background text-foreground before:bg-primary focus-visible:ring-ring relative font-medium before:absolute before:inset-x-0 before:top-0 before:h-0.5'
+                  : 'text-muted-foreground hover:bg-background/50 hover:text-foreground focus-visible:ring-ring'
               )}
             >
-              {tab.tone ? <StatusDot tone={tab.tone} testId="tab-dot" /> : null}
+              {tab.tone ? (
+                <StatusIcon tone={tab.tone} testId="tab-dot" className="size-3.5" />
+              ) : null}
               <span className="max-w-tab truncate">{tab.label}</span>
             </button>
           );
@@ -112,7 +115,7 @@ export function TabStrip({
             onClick={() => (prefill ? onAsk(prefill) : onOpen({ to: 'chat' }))}
             className={cn(
               TAB,
-              'text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring'
+              'text-muted-foreground hover:bg-background/50 hover:text-foreground focus-visible:ring-ring'
             )}
           >
             <Plus className="size-3.5" aria-hidden="true" />

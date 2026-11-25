@@ -4,6 +4,7 @@
  * order, so the row never says "ready" beside "asleep".
  */
 import type { ThreadStatus } from './delivery';
+import type { Tone } from './taskState';
 
 /** What the live view knows: the runner's turn while attached, else what the channel is doing. */
 export type LiveStatus =
@@ -46,28 +47,29 @@ export function barStatus(thread: ThreadStatus | null, live: LiveStatus | null):
   return live;
 }
 
-/** A hollow marker: an outline in the idle colour, with no fill. */
-const HOLLOW = 'border border-status-idle';
-
-const DOT: Record<BarStatus, string> = {
-  'needs you': 'bg-status-attention',
-  'last message unconfirmed': 'bg-status-attention',
-  working: 'bg-status-working animate-pulse',
-  starting: 'bg-status-working animate-pulse',
-  'waking…': 'bg-status-working animate-pulse',
-  unreachable: 'bg-status-failed',
-  unavailable: 'bg-status-failed',
-  'last message failed': 'bg-status-failed',
-  // At rest: hollow, as an idle agent is in herdr.
-  ready: HOLLOW,
-  'connecting…': `${HOLLOW} animate-pulse`,
-  'reconnecting…': `${HOLLOW} animate-pulse`,
-  idle: HOLLOW,
-  asleep: HOLLOW,
-  paused: HOLLOW
+/**
+ * The status's place in the status language, so its icon is the sidebar's: needs you and an
+ * unconfirmed message are the owner's turn; a turn running, starting or waking is working; the
+ * backend unreachable, the channel unavailable or the last message failed is a failure; everything
+ * else is at rest, including still trying to connect.
+ */
+const TONE: Record<BarStatus, Tone> = {
+  'needs you': 'attention',
+  'last message unconfirmed': 'attention',
+  working: 'active',
+  starting: 'active',
+  'waking…': 'active',
+  unreachable: 'bad',
+  unavailable: 'bad',
+  'last message failed': 'bad',
+  ready: 'muted',
+  'connecting…': 'muted',
+  'reconnecting…': 'muted',
+  idle: 'muted',
+  asleep: 'muted',
+  paused: 'muted'
 };
 
-/** The status marker's colour class. The word always shows beside it, so colour is never alone. */
-export function barStatusDot(status: BarStatus): string {
-  return DOT[status];
+export function barStatusTone(status: BarStatus): Tone {
+  return TONE[status];
 }

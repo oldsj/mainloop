@@ -152,7 +152,7 @@ describe('shell switch', () => {
     const strip = () => screen.getByTestId('tab-strip');
     expect(strip()).toHaveAccessibleName('Agents in main');
     expect(screen.getByRole('main')).not.toContainElement(strip());
-    expect(within(strip()).getByRole('button', { current: 'page' })).toHaveTextContent('main');
+    expect(within(strip()).getByRole('button', { current: 'page' })).toHaveTextContent('Mainloop');
 
     // When the owner opens an agent from the column
     await user.click(
@@ -169,7 +169,7 @@ describe('shell switch', () => {
       within(strip())
         .getAllByTestId('tab')
         .map((tab) => tab.textContent)
-    ).toEqual(['overview', 'Add retry button']);
+    ).toEqual(['Overview', 'Add retry button']);
     expect(within(strip()).getByRole('button', { current: 'page' })).toHaveTextContent(
       'Add retry button'
     );
@@ -181,7 +181,7 @@ describe('shell switch', () => {
         within(strip())
           .getAllByTestId('tab')
           .map((tab) => tab.textContent)
-      ).toEqual(['main', 'settings'])
+      ).toEqual(['Mainloop', 'Settings'])
     );
   });
 
@@ -197,7 +197,7 @@ describe('shell switch', () => {
     expect([...strip.children].map((child) => child.getAttribute('data-testid'))).toEqual([
       'tab-scroller'
     ]);
-    expect(within(strip).getByRole('button', { current: 'page' })).toHaveTextContent('main');
+    expect(within(strip).getByRole('button', { current: 'page' })).toHaveTextContent('Mainloop');
     // The bar at the bottom is the desktop's activity bar laid flat, with words under the icons.
     const bar = screen.getByTestId('mobile-tab-bar');
     expect(shell.lastElementChild).toBe(bar);
@@ -304,7 +304,7 @@ describe('header health link', () => {
     expect(screen.getByRole('heading', { name: 'Session defaults' })).toBeInTheDocument();
     expect(
       within(screen.getByTestId('tab-strip')).getByRole('button', { current: 'page' })
-    ).toHaveTextContent('settings');
+    ).toHaveTextContent('Settings');
     await waitFor(() => expect(document.title).toBe('Settings · Mainloop'));
   });
 
@@ -507,11 +507,11 @@ describe('the phone’s top row', () => {
   });
 
   it.each([
-    ['/', 'main'],
-    ['/inbox', 'inbox'],
-    ['/health', 'health'],
-    ['/settings', 'settings'],
-    ['/inbox?tab=explorer', 'inbox']
+    ['/', 'Mainloop'],
+    ['/inbox', 'Inbox'],
+    ['/health', 'Health'],
+    ['/settings', 'Settings'],
+    ['/inbox?tab=explorer', 'Inbox']
   ])('lights the tab for where the owner is: %s', async (url, tab) => {
     setViewport(false);
     await renderAt(url);
@@ -529,9 +529,11 @@ describe('the phone’s top row', () => {
     expect(router.state.location.search).not.toHaveProperty('tab');
     expect(inbox).toHaveAttribute('aria-current', 'page');
     // The main chat is the first tab of the main thread's space.
-    await user.click(within(screen.getByTestId('tab-strip')).getByRole('button', { name: 'main' }));
+    await user.click(
+      within(screen.getByTestId('tab-strip')).getByRole('button', { name: 'Mainloop' })
+    );
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
-    expect(lit()).toEqual(['main']);
+    expect(lit()).toEqual(['Mainloop']);
   });
 
   it('brings the lists up over a page, keeping the page’s route', async () => {
@@ -780,7 +782,7 @@ describe('explorer panel', () => {
       within(strip)
         .getAllByTestId('tab')
         .map((tab) => tab.textContent)
-    ).toEqual(['main']);
+    ).toEqual(['Mainloop']);
     expect(within(strip).queryByText('Add retry button')).toBeNull();
 
     // When the projects answer
@@ -796,7 +798,7 @@ describe('explorer panel', () => {
       within(strip)
         .getAllByTestId('tab')
         .map((tab) => tab.textContent)
-    ).toEqual(['main']);
+    ).toEqual(['Mainloop']);
   });
 
   it('says the counts are loading until the first read answers, not that nothing needs the owner', async () => {
@@ -970,7 +972,7 @@ describe('explorer panel', () => {
         taskRead(({ params }) => HttpResponse.json(params.task_id === 'task-a' ? first : second))
       );
       const router = await renderAt('/');
-      await waitFor(() => expect(tabs()).toEqual(['main*', 'First', 'Second']));
+      await waitFor(() => expect(tabs()).toEqual(['Mainloop*', 'First', 'Second']));
       const box = await screen.findByRole('textbox', { name: 'Message' });
       act(() => box.focus());
 
@@ -978,7 +980,7 @@ describe('explorer panel', () => {
       prefix(box);
       then('n', box);
       await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/task-a'));
-      await waitFor(() => expect(tabs()).toEqual(['main', 'First*', 'Second']));
+      await waitFor(() => expect(tabs()).toEqual(['Mainloop', 'First*', 'Second']));
 
       // 3: the third tab; p: back one; n from the last wraps to the first
       prefix();

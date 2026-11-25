@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { barStatus, barStatusDot, type LiveStatus } from './barStatus';
+import { barStatus, barStatusTone, type LiveStatus } from './barStatus';
 
 describe('barStatus', () => {
   it('uses the thread status alone when there is no live view', () => {
@@ -53,16 +53,16 @@ describe('barStatus', () => {
   });
 });
 
-describe('barStatusDot', () => {
-  it('fills the marker for working and needs you, and leaves it hollow at rest', () => {
-    expect(barStatusDot('needs you')).toContain('bg-status-attention');
-    expect(barStatusDot('working')).toContain('bg-status-working');
-    expect(barStatusDot('last message failed')).toContain('bg-status-failed');
-    for (const rest of ['ready', 'idle', 'asleep', 'paused'] as const) {
-      expect(barStatusDot(rest)).toBe('border border-status-idle');
-      expect(barStatusDot(rest)).not.toMatch(/\bbg-/);
+describe('barStatusTone', () => {
+  it('speaks the sidebar’s status language: the owner’s turn, working, failed, or at rest', () => {
+    expect(barStatusTone('needs you')).toBe('attention');
+    expect(barStatusTone('last message unconfirmed')).toBe('attention');
+    expect(barStatusTone('working')).toBe('active');
+    expect(barStatusTone('waking…')).toBe('active');
+    expect(barStatusTone('last message failed')).toBe('bad');
+    expect(barStatusTone('unreachable')).toBe('bad');
+    for (const rest of ['ready', 'idle', 'asleep', 'paused', 'reconnecting…'] as const) {
+      expect(barStatusTone(rest)).toBe('muted');
     }
-    // Still trying to connect is at rest, pulsing.
-    expect(barStatusDot('reconnecting…')).toBe('border border-status-idle animate-pulse');
   });
 });

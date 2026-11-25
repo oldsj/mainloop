@@ -393,7 +393,7 @@ describe('a project’s standing supervisor', () => {
     expect(strip({ to: 'project', id: 'project-1' }, '/projects/project-1')).toEqual([
       'Supervisor',
       'worker',
-      'overview*'
+      'Overview*'
     ]);
   });
 
@@ -405,7 +405,7 @@ describe('a project’s standing supervisor', () => {
       spaceTabs(buildAgentColumn(src, page), 'project-1', page, '/projects/project-1').map(
         (tab) => tab.label
       )
-    ).toEqual(['overview', 'worker']);
+    ).toEqual(['Overview', 'worker']);
   });
 });
 
@@ -460,32 +460,32 @@ describe('the tab strip', () => {
   };
 
   it('is the main chat and the agents of no project, in the main thread’s space', () => {
-    expect(strip({ to: 'chat' }, '/')).toEqual(['main*', 'Scratch']);
+    expect(strip({ to: 'chat' }, '/')).toEqual(['Mainloop*', 'Scratch']);
   });
 
   it('is the project’s overview, then its agents, with the one being shown lit', () => {
     expect(strip({ to: 'project', id: 'project-1' }, '/projects/project-1')).toEqual([
-      'overview*',
+      'Overview*',
       'Add retry button',
       'Fix CI flake'
     ]);
     expect(strip({ to: 'task', id: 'b' }, '/tasks/b')).toEqual([
-      'overview',
+      'Overview',
       'Add retry button',
       'Fix CI flake*'
     ]);
     // An agent's tab is lit on its session as on its task page.
     expect(strip({ to: 'session', id: 'session-a' }, '/sessions/session-a')).toEqual([
-      'overview',
+      'Overview',
       'Add retry button*',
       'Fix CI flake'
     ]);
   });
 
   it('gives a page that is no agent’s a last tab of its own, so one tab is always lit', () => {
-    expect(strip({ to: 'needs' }, '/inbox')).toEqual(['main', 'Scratch', 'inbox*']);
-    expect(strip(null, '/settings')).toEqual(['main', 'Scratch', 'settings*']);
-    expect(strip(null, '/schedules/new')).toEqual(['main', 'Scratch', 'schedules*']);
+    expect(strip({ to: 'needs' }, '/inbox')).toEqual(['Mainloop', 'Scratch', 'Inbox*']);
+    expect(strip(null, '/settings')).toEqual(['Mainloop', 'Scratch', 'Settings*']);
+    expect(strip(null, '/schedules/new')).toEqual(['Mainloop', 'Scratch', 'Schedules*']);
   });
 
   it('leads each tab to its page, except the one that only names the page being shown', () => {

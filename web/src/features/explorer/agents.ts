@@ -359,16 +359,16 @@ export interface TabRow {
 
 /** What a page that is no agent's is called on its tab, by the first part of its path. */
 const PAGE_TABS: Record<string, string> = {
-  inbox: 'inbox',
-  settings: 'settings',
-  health: 'health',
-  schedules: 'schedules',
-  transcripts: 'transcripts',
-  agents: 'new agent',
-  workspaces: 'workspace',
-  tasks: 'task',
-  sessions: 'session',
-  projects: 'overview'
+  inbox: 'Inbox',
+  settings: 'Settings',
+  health: 'Health',
+  schedules: 'Schedules',
+  transcripts: 'Transcripts',
+  agents: 'New agent',
+  workspaces: 'Workspace',
+  tasks: 'Task',
+  sessions: 'Session',
+  projects: 'Overview'
 };
 
 /**
@@ -390,14 +390,14 @@ export function spaceTabs(
     space === MAINLOOP_SPACE
       ? {
           id: 'home',
-          label: 'main',
+          label: 'Mainloop',
           tone: model.agents.find((agent) => agent.role === 'main')?.tone,
           target: { to: 'chat' },
           current: page?.to === 'chat'
         }
       : {
           id: 'home',
-          label: 'overview',
+          label: 'Overview',
           target: { to: 'project', id: space },
           current: page?.to === 'project' && page.id === space
         };

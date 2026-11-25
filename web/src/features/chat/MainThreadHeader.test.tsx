@@ -84,7 +84,7 @@ describe('MainThreadHeader', () => {
       onStop: vi.fn(),
       stopping: true
     });
-    expect(screen.getByTestId('mt-stop-turn')).toHaveTextContent('stopping…');
+    expect(screen.getByTestId('mt-stop-turn')).toHaveTextContent('Stopping…');
     expect(screen.getByTestId('mt-stop-turn')).toBeDisabled();
   });
 

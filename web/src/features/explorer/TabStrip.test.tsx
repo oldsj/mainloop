@@ -94,7 +94,7 @@ describe('TabStrip', () => {
     const strip = screen.getByRole('navigation', { name: 'Agents in widgets' });
     const tabs = within(strip).getAllByTestId('tab');
     expect(tabs.map((tab) => tab.textContent)).toEqual([
-      'overview',
+      'Overview',
       'Add retry button',
       'Fix CI flake'
     ]);
@@ -153,8 +153,8 @@ describe('TabStrip', () => {
     renderStrip({ ready: false, page: null, pathname: '/settings', space: MAINLOOP_SPACE });
 
     expect(screen.getAllByTestId('tab').map((tab) => tab.textContent)).toEqual([
-      'main',
-      'settings'
+      'Mainloop',
+      'Settings'
     ]);
     // No agent's tab yet, though the model already holds some: they are not placed.
     expect(screen.queryByText('Add retry button')).toBeNull();
@@ -164,7 +164,7 @@ describe('TabStrip', () => {
     const user = userEvent.setup();
     const { onOpen } = renderStrip();
 
-    await user.click(screen.getByRole('button', { name: 'overview' }));
+    await user.click(screen.getByRole('button', { name: 'Overview' }));
     await user.click(screen.getByRole('button', { name: 'Fix CI flake' }));
 
     expect(onOpen.mock.calls).toEqual([
@@ -192,8 +192,8 @@ describe('TabStrip', () => {
       within(strip)
         .getAllByTestId('tab')
         .map((tab) => tab.textContent)
-    ).toEqual(['main', 'settings']);
-    expect(within(strip).getByRole('button', { current: 'page' })).toHaveTextContent('settings');
+    ).toEqual(['Mainloop', 'Settings']);
+    expect(within(strip).getByRole('button', { current: 'page' })).toHaveTextContent('Settings');
 
     // The "+" there is the main chat itself: Mainloop is who starts work.
     await user.click(screen.getByRole('button', { name: 'New: ask Mainloop' }));
