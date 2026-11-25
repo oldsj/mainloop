@@ -26,6 +26,15 @@ export function useRespondToQueueItem() {
   });
 }
 
+/** Re-reads the inbox after the iPhone app answered a card itself (a signed Approve). */
+export function useApprovedInNativeShell() {
+  const queryClient = useQueryClient();
+  return () => {
+    void queryClient.invalidateQueries({ queryKey: keys.attention() });
+    void queryClient.invalidateQueries({ queryKey: keys.activity() });
+  };
+}
+
 /**
  * Dismisses an unavailable input notice, named by its Activity row's `queue_item_id`. The row
  * leaves Activity at once. A refused dismiss puts the previous rows back, and the caller shows the

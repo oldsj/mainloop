@@ -235,3 +235,53 @@ func TestTheAppsAudienceNeedsToBeConfigured(t *testing.T) {
 		t.Fatal("a token for the app's client verified without MAINLOOP_AUTH_DEVICE_CLIENT_ID")
 	}
 }
+
+// Given the iPhone app's web view, which sends its device's web session as a cookie, then the
+// request acts as that device (via "session") with the device's limits, and a session that is
+// unknown, expired (the store no longer finds it) or whose device was revoked is refused.
+func TestADeviceWebSession(t *testing.T) {
+	f := newFixture(t, auth.ModeEnforce)
+	phone := authtest.NewDevice(t, phoneID)
+	f.devices.Add(phone)
+	const session = "c2Vzc2lvbi10b2tlbi1mb3ItdGhlLXRlc3RzLW9ubHktMDAwMDA"
+	f.devices.AddSession(session, phoneID)
+	web := map[string]string{auth.ClientHeader: "web", "Origin": "https://mainloop.test"}
+
+	cases := []struct {
+		name string
+		req  req
+		want int // 0: passed as the device's session
+	}{
+		{"reads", req{method: "GET", path: "/attention", deviceCookie: session}, 0},
+		{"writes from the app's own origin", req{method: "POST", path: "/sessions", deviceCookie: session, headers: web}, 0},
+		{"write without the client header", req{method: "POST", path: "/sessions", deviceCookie: session}, 403},
+		{"write from another origin", req{method: "POST", path: "/sessions", deviceCookie: session, headers: map[string]string{auth.ClientHeader: "web", "Origin": "https://evil.test"}}, 403},
+		{"unknown or expired session", req{method: "GET", path: "/attention", deviceCookie: strings.Repeat("x", 43)}, 401},
+		{"malformed session", req{method: "GET", path: "/attention", deviceCookie: "short"}, 401},
+		{"may not register a device", req{method: "POST", path: "/devices", deviceCookie: session, headers: web}, 403},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := f.do(c.req)
+			if c.want == 0 {
+				if !f.called || f.seen == nil || f.seen.Kind != auth.KindDevice || f.seen.Name != phoneID || f.seen.Via != "session" {
+					t.Fatalf("status %d, principal %+v; logs:\n%s", w.Code, f.seen, f.logs)
+				}
+				return
+			}
+			if f.called || w.Code != c.want {
+				t.Fatalf("status = %d (passed=%v), want %d; logs:\n%s", w.Code, f.called, c.want, f.logs)
+			}
+		})
+	}
+
+	// A signed request wins over the cookie, as a bearer wins over the login cookie.
+	if f.do(req{method: "GET", path: "/attention", bearer: phone.Token(t, "GET", "/attention", body, nil), deviceCookie: session}); !f.called || f.seen.Via != "device" {
+		t.Fatalf("bearer and cookie: principal %+v", f.seen)
+	}
+
+	f.devices.Revoke(phoneID)
+	if w := f.do(req{method: "GET", path: "/attention", deviceCookie: session}); f.called || w.Code != 401 {
+		t.Fatalf("after revocation: status %d, passed=%v", w.Code, f.called)
+	}
+}

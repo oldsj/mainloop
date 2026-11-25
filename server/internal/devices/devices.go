@@ -90,10 +90,26 @@ func (s *Store) UseToken(ctx context.Context, id, jti string, until time.Time) (
 	return n == 1, err
 }
 
-// PruneTokenUses implements auth.DeviceStore.
+// PruneTokenUses implements auth.DeviceStore: used tokens and web sessions past their expiry.
 func (s *Store) PruneTokenUses(ctx context.Context) error {
-	_, err := dbq.New(s.Pool).PruneDeviceTokenUses(ctx)
+	q := dbq.New(s.Pool)
+	if _, err := q.PruneDeviceTokenUses(ctx); err != nil {
+		return err
+	}
+	_, err := q.PruneDeviceWebSessions(ctx)
 	return err
+}
+
+// WebSession implements auth.DeviceStore. A session of another owner's device is unknown.
+func (s *Store) WebSession(ctx context.Context, tokenHash []byte) (string, error) {
+	row, err := dbq.New(s.Pool).GetDeviceWebSession(ctx, tokenHash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", auth.ErrUnknownSession
+	}
+	if err != nil {
+		return "", err
+	}
+	return row.DeviceID, nil
 }
 
 // PublicKey decodes JWK coordinates into a P-256 key, refusing a point that is not on the curve.
@@ -448,4 +464,37 @@ func (a *DevicesAPI) RevokeDevice(ctx context.Context, r api.RevokeDeviceRequest
 		a.OnRevoke(r.DeviceId)
 	}
 	return api.RevokeDevice204Response{}, nil
+}
+
+// CreateDeviceWebSession implements api.StrictServerInterface: a request the device key signed
+// trades for a web session the iPhone app's web view sends as a cookie (docs/specs/devices.md,
+// "The app's web view"). Never from a web session (a page can't extend its own session) or a
+// sign-in. The token is returned once and only its SHA-256 is kept.
+func (a *DevicesAPI) CreateDeviceWebSession(ctx context.Context, _ api.CreateDeviceWebSessionRequestObject) (api.CreateDeviceWebSessionResponseObject, error) {
+	if err := a.ready(); err != nil {
+		return nil, err
+	}
+	p, ok := auth.FromContext(ctx)
+	if !ok || p.Kind != auth.KindDevice || p.Via != "device" {
+		return api.CreateDeviceWebSession403JSONResponse{Detail: "Only a request signed with a registered device's key can start a web session"}, nil
+	}
+	if _, found, err := a.currentDevice(ctx, p.Name); err != nil || !found {
+		if err != nil {
+			return nil, err
+		}
+		return api.CreateDeviceWebSession403JSONResponse{Detail: "Device not found"}, nil
+	}
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return nil, err
+	}
+	token := base64.RawURLEncoding.EncodeToString(b)
+	sum := sha256.Sum256([]byte(token))
+	expires := a.now().Add(auth.DeviceSessionLife).UTC()
+	if err := dbq.New(a.Pool).InsertDeviceWebSession(ctx, dbq.InsertDeviceWebSessionParams{
+		TokenHash: sum[:], DeviceID: p.Name, ExpiresAt: expires,
+	}); err != nil {
+		return nil, err
+	}
+	return api.CreateDeviceWebSession201JSONResponse{CookieName: auth.DeviceSessionCookie, Token: token, ExpiresAt: expires}, nil
 }

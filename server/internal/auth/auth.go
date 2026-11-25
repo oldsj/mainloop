@@ -89,7 +89,8 @@ type Principal struct {
 	// Name is the owner's subject, the ServiceAccount's namespace/name or the device id.
 	Name  string
 	Scope Scope
-	// Via is "bearer", "cookie" or "device".
+	// Via is "bearer", "cookie", "device" (a request the device key signed) or "session" (the
+	// device's web session, DeviceSessionCookie).
 	Via string
 	// RegistrationOnly marks a Pocket ID token of the native app's client
 	// (MAINLOOP_AUTH_DEVICE_CLIENT_ID) and not the web audience: it may only register a device.
@@ -276,8 +277,8 @@ func public(op *openapi3.Operation) bool {
 	return op != nil && op.Security != nil && len(*op.Security) == 0
 }
 
-// identify reads the bearer, or else the login cookie. A credential that is present but invalid is
-// refused rather than treated as absent.
+// identify reads the bearer, or else a device's web session cookie, or else the login cookie. A
+// credential that is present but invalid is refused rather than treated as absent.
 func (a *Authenticator) identify(r *http.Request) (*Principal, *refusal) {
 	if h := r.Header.Get("Authorization"); h != "" {
 		scheme, token, ok := strings.Cut(h, " ")
@@ -286,6 +287,16 @@ func (a *Authenticator) identify(r *http.Request) (*Principal, *refusal) {
 			return nil, unauthorized("malformed Authorization header")
 		}
 		return a.bearer(r, token)
+	}
+	if c, err := r.Cookie(DeviceSessionCookie); err == nil && c.Value != "" {
+		if a.Devices == nil {
+			return nil, unauthorized("device sessions are not accepted here")
+		}
+		id, err := a.Devices.Session(r, c.Value)
+		if err != nil {
+			return nil, unauthorized(err.Error())
+		}
+		return &Principal{Kind: KindDevice, Name: id, Scope: ScopeOwner, Via: "session"}, nil
 	}
 	if a.OIDC != nil {
 		if c, err := r.Cookie(a.Cookie); err == nil && c.Value != "" {

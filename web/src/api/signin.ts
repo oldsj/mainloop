@@ -1,3 +1,4 @@
+import { inNativeShell, sessionExpiredInNativeShell } from '@/lib/nativeShell';
 import { API_URL } from './config';
 
 /**
@@ -9,6 +10,9 @@ import { API_URL } from './config';
  * login and back. If a 401 comes again within a minute of that reload, the app stops reloading,
  * reports `expired`, and the owner signs in again with a button. That way a backend that refuses a
  * sign-in the gateway accepts cannot send the page into a reload loop.
+ *
+ * In the iPhone app there is no gateway sign-in: the app's web session is a cookie the app sets. A
+ * "reload" there asks the app instead, which starts a new session and reloads the page itself.
  */
 
 /** Sent on every owner write, and on reads when the API shares the app's origin. */
@@ -47,7 +51,9 @@ function sessionStore(): Pick<Storage, 'getItem' | 'setItem'> | null {
 
 export function createSignIn(options: SignInOptions = {}) {
   const now = options.now ?? (() => Date.now());
-  const reload = options.reload ?? (() => window.location.reload());
+  const reload =
+    options.reload ??
+    (() => (inNativeShell() ? sessionExpiredInNativeShell() : window.location.reload()));
   const storage = options.storage === undefined ? sessionStore() : options.storage;
   let status: SignInStatus = 'signed-in';
   const listeners = new Set<() => void>();

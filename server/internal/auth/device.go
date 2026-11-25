@@ -45,6 +45,17 @@ var DeviceIDPattern = regexp.MustCompile(`^dev_[a-z0-9]{26}$`)
 // ErrUnknownDevice is returned by a DeviceStore for an id it has no device for.
 var ErrUnknownDevice = errors.New("unknown device")
 
+// ErrUnknownSession is returned by a DeviceStore for a web session it has none for, or one that
+// has expired.
+var ErrUnknownSession = errors.New("unknown or expired session")
+
+// DeviceSessionCookie names the cookie the iPhone app's web view sends: a device's web session
+// (docs/specs/devices.md, "The app's web view"). The app sets it HttpOnly, so the page can't read it.
+const DeviceSessionCookie = "mainloop-device"
+
+// DeviceSessionLife is how long a web session lasts. The app makes a new one before it runs out.
+const DeviceSessionLife = 12 * time.Hour
+
 // DeviceRecord is what the verifier needs about a registered device.
 type DeviceRecord struct {
 	Key     *ecdsa.PublicKey
@@ -61,8 +72,11 @@ type DeviceStore interface {
 	// UseToken records a write's token until it expires: false when it was used before, by this
 	// process or another.
 	UseToken(ctx context.Context, id, jti string, until time.Time) (bool, error)
-	// PruneTokenUses forgets used tokens past their expiry.
+	// PruneTokenUses forgets used tokens and web sessions past their expiry.
 	PruneTokenUses(ctx context.Context) error
+	// WebSession returns the device of the web session whose token has this SHA-256, or
+	// ErrUnknownSession when there is none or it has expired.
+	WebSession(ctx context.Context, tokenHash []byte) (string, error)
 }
 
 // Devices verifies device request tokens.
@@ -167,6 +181,28 @@ func (d *Devices) Verify(r *http.Request, raw string) (string, error) {
 	}
 	d.touch(r.Context(), kid, now)
 	return kid, nil
+}
+
+// Session checks a web session token from the DeviceSessionCookie and returns its device id. The
+// session acts as its device: a revoked device's sessions are refused on the next request.
+func (d *Devices) Session(r *http.Request, token string) (string, error) {
+	if len(token) < 32 || len(token) > 128 {
+		return "", errors.New("device session: malformed")
+	}
+	sum := sha256.Sum256([]byte(token))
+	id, err := d.Store.WebSession(r.Context(), sum[:])
+	if err != nil {
+		return "", fmt.Errorf("device session: %w", err)
+	}
+	rec, err := d.Store.Device(r.Context(), id)
+	if err != nil {
+		return "", fmt.Errorf("device session: %w", err)
+	}
+	if rec.Revoked {
+		return "", errors.New("device session: device revoked")
+	}
+	d.touch(r.Context(), id, d.now())
+	return id, nil
 }
 
 func safeMethod(m string) bool {

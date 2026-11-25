@@ -114,6 +114,28 @@ Requests stay open no longer than their device: revoking a device ends its open 
 stream and a live session) in the process that revoked it at once, and in other replicas within 15
 seconds.
 
+## The app's web view
+
+The iPhone app shows the web app itself in a web view ([iOS app](ios-app.md)). A web view can't
+sign each request with the device key, so the app trades one signed request for a web session:
+
+- `POST /devices/current/web-session`, signed by the device key, answers `201` with
+  `cookie_name` (`mainloop-device`), a `token` (32 random bytes, base64url) and `expires_at`, 12
+  hours on. Only a request the device key signed starts one. A web session can't start another, so
+  a page can't extend its own; neither can a Pocket ID sign-in (`403`). The token is returned once.
+  The server keeps only its SHA-256 (`device_web_sessions`), and expired rows are pruned.
+- The app sets the token as an HttpOnly, Secure, SameSite=Strict cookie in a web view store that
+  keeps nothing on disk, so the page's scripts can't read it. It starts a new session at launch,
+  before the current one runs out, and when the page reports a `401`.
+- A request with the cookie acts as the device (via `session`): the owner's scope, the write checks
+  of [authentication](authentication.md#owner-writes) (the page sends `X-Mainloop-Client: web` and
+  the app's own `Origin`), and every device limit. It can't register a device, answer a device
+  registration, revoke another device, start a web session, or approve a privileged action without
+  the phone's Touch ID signature (the page asks the app for that; see [iOS app](ios-app.md)).
+- Revoking the device ends its sessions on the next request, and its open streams as above. Expiry
+  is checked when a request starts: a stream opened before it stays open until it closes or the
+  device is revoked.
+
 ## Managing devices
 
 | Operation                      | Who                                                                                            |

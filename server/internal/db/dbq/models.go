@@ -226,6 +226,13 @@ type DeviceTokenUse struct {
 	ExpiresAt time.Time
 }
 
+type DeviceWebSession struct {
+	TokenHash []byte
+	DeviceID  string
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
 type DevloopLease struct {
 	ID                 string
 	HolderSessionID    *string

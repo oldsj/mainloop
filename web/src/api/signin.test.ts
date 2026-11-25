@@ -49,6 +49,19 @@ describe('createSignIn', () => {
     expect(reload).toHaveBeenCalledTimes(2);
   });
 
+  it('in the iPhone app, asks the app for a new session instead of reloading', () => {
+    const postMessage = vi.fn(async () => undefined);
+    (window as unknown as { webkit: unknown }).webkit = {
+      messageHandlers: { mainloop: { postMessage } }
+    };
+    try {
+      createSignIn({ storage: memoryStorage() }).expired();
+      expect(postMessage).toHaveBeenCalledWith({ type: 'sessionExpired' });
+    } finally {
+      delete (window as unknown as { webkit?: unknown }).webkit;
+    }
+  });
+
   it('asks rather than reloading when it cannot remember a reload', () => {
     const reload = vi.fn();
     const signIn = createSignIn({ reload, storage: null });

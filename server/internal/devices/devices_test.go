@@ -2,6 +2,7 @@ package devices_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -479,5 +480,60 @@ func TestARegistrationCarriesTheApprovalKey(t *testing.T) {
 	if _, err := db.Pool.Exec(context.Background(), `UPDATE owner_devices SET approval_key_x = $2, approval_key_y = $3, approval_key_thumbprint = $4 WHERE id = $1`,
 		plain.Id, bx, by, devices.Thumbprint(bx, by)); err == nil {
 		t.Fatal("an approval key was added after registration")
+	}
+}
+
+// Given a registered phone, when it signs a request for a web session, then it gets a token once,
+// the store finds the session by the token's hash (never the token), and the session ends when it
+// expires or the device is revoked. A web session, a sign-in or an unsigned caller can't start one.
+func TestADeviceStartsAWebSession(t *testing.T) {
+	db := testdb.New(t)
+	a := &devices.DevicesAPI{Pool: db.Pool, OwnerID: owner}
+	dev := register(t, a, authtest.NewDevice(t, "dev_placeholder00000000000000"))
+	store := &devices.Store{Pool: db.Pool, OwnerID: owner}
+	ctx := context.Background()
+
+	res, err := a.CreateDeviceWebSession(asDevice(dev.Id), api.CreateDeviceWebSessionRequestObject{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, ok := res.(api.CreateDeviceWebSession201JSONResponse)
+	if !ok || s.CookieName != auth.DeviceSessionCookie || len(s.Token) != 43 {
+		t.Fatalf("session = %#v", res)
+	}
+	if life := time.Until(s.ExpiresAt); life < auth.DeviceSessionLife-time.Minute || life > auth.DeviceSessionLife {
+		t.Fatalf("expires in %s", life)
+	}
+	sum := sha256.Sum256([]byte(s.Token))
+	if id, err := store.WebSession(ctx, sum[:]); err != nil || id != dev.Id {
+		t.Fatalf("lookup: %q, %v", id, err)
+	}
+	var stored int
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM device_web_sessions WHERE token_hash = $1`, []byte(s.Token)).Scan(&stored); err != nil || stored != 0 {
+		t.Fatalf("the token itself is stored: %d, %v", stored, err)
+	}
+
+	for name, c := range map[string]context.Context{
+		"a web session": auth.WithPrincipal(ctx, auth.Principal{Kind: auth.KindDevice, Name: dev.Id, Scope: auth.ScopeOwner, Via: "session"}),
+		"a sign-in":     signIn(authtest.NewDevice(t, "dev_placeholder11111111111111")),
+		"no principal":  ctx,
+	} {
+		if res, err := a.CreateDeviceWebSession(c, api.CreateDeviceWebSessionRequestObject{}); err != nil || !isType[api.CreateDeviceWebSession403JSONResponse](res) {
+			t.Fatalf("%s: %#v, %v", name, res, err)
+		}
+	}
+
+	if _, err := db.Pool.Exec(ctx, `UPDATE device_web_sessions SET created_at = now() - interval '13 hours', expires_at = now() - interval '1 hour'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.WebSession(ctx, sum[:]); !errors.Is(err, auth.ErrUnknownSession) {
+		t.Fatalf("expired: %v", err)
+	}
+	if err := store.PruneTokenUses(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var left int
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM device_web_sessions`).Scan(&left); err != nil || left != 0 {
+		t.Fatalf("after pruning: %d, %v", left, err)
 	}
 }

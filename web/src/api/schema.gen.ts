@@ -142,6 +142,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/devices/current/web-session': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Create Device Web Session
+     * @description Starts a web session for the device that signed this request (docs/specs/devices.md, "The app's web view"). The iPhone app shows the web app in a web view, which can't sign its requests; it sets the returned token as the HttpOnly cookie `cookie_name`, and every request carrying it acts as this device until `expires_at` or the device is revoked. Only a request the device key signed starts one, never a web session or a sign-in. The token is returned once; the server keeps only its SHA-256.
+     */
+    post: operations['createDeviceWebSession'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/devices/current/push': {
     parameters: {
       query?: never;
@@ -4846,6 +4866,18 @@ export interface components {
       /** @description When APNs said the token is no longer valid; pushes stop until the device sets a new one. */
       invalid_at: string | null;
     };
+    /** @description A device's web session; the token is shown once. */
+    DeviceWebSession: {
+      /**
+       * @description The cookie the web view sends the token in.
+       * @example mainloop-device
+       */
+      cookie_name: string;
+      /** @description The session's secret, 43 base64url characters. Set it HttpOnly and Secure. */
+      token: string;
+      /** Format: date-time */
+      expires_at: string;
+    };
     /** @description An APNs device token, as the app received it, in lower-case hex. */
     DevicePushRegistration: {
       token: string;
@@ -7419,6 +7451,36 @@ export interface operations {
       };
       /** @description Not Found */
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  createDeviceWebSession: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description The new session */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['DeviceWebSession'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
         headers: {
           [name: string]: unknown;
         };

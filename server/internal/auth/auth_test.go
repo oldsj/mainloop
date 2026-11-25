@@ -104,6 +104,7 @@ type req struct {
 	method, path string
 	bearer       string
 	cookie       string
+	deviceCookie string // the iPhone app's web session (auth.DeviceSessionCookie)
 	headers      map[string]string
 }
 
@@ -112,6 +113,9 @@ func (f *fixture) do(r req) *httptest.ResponseRecorder {
 	hr := httptest.NewRequestWithContext(context.Background(), r.method, "https://mainloop.test"+r.path, strings.NewReader("{}"))
 	if r.bearer != "" {
 		hr.Header.Set("Authorization", "Bearer "+r.bearer)
+	}
+	if r.deviceCookie != "" {
+		hr.AddCookie(&http.Cookie{Name: auth.DeviceSessionCookie, Value: r.deviceCookie})
 	}
 	if r.cookie != "" {
 		hr.AddCookie(&http.Cookie{Name: "mainloop-id", Value: r.cookie})

@@ -81,6 +81,30 @@ type DeviceStore struct {
 	Touched map[string]int
 	// Pruned counts PruneTokenUses calls.
 	Pruned int
+	// Sessions maps a web session token's SHA-256 (hex) to its device.
+	Sessions map[string]string
+}
+
+// AddSession records a web session token for device id.
+func (s *DeviceStore) AddSession(token, id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Sessions == nil {
+		s.Sessions = map[string]string{}
+	}
+	sum := sha256.Sum256([]byte(token))
+	s.Sessions[hex.EncodeToString(sum[:])] = id
+}
+
+// WebSession implements auth.DeviceStore.
+func (s *DeviceStore) WebSession(_ context.Context, tokenHash []byte) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id, ok := s.Sessions[hex.EncodeToString(tokenHash)]
+	if !ok {
+		return "", auth.ErrUnknownSession
+	}
+	return id, nil
 }
 
 // DeviceOrigin is the instance origin device tokens are signed for in tests (Devices.Audience).

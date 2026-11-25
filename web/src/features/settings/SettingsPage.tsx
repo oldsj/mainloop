@@ -2,6 +2,7 @@ import { cn } from '@/components/ui/cn';
 import { PAGE } from '@/components/shared/measure';
 import { PageHeader } from '@/components/shared/page-header';
 import { API_SAME_ORIGIN, SIGN_OUT_PATH } from '@/api/signin';
+import { inNativeShell, openNativeDeviceSettings } from '@/lib/nativeShell';
 import { ThemeSelector } from '@/shell/ThemeSelector';
 import { OwnerDotfilesSection } from '@/features/dotfiles/DotfilesSection';
 import { DevicesSection } from './DevicesSection';
@@ -26,7 +27,26 @@ export function SettingsPage() {
           <ThemeSelector />
         </div>
       </section>
-      {API_SAME_ORIGIN ? (
+      {inNativeShell() ? (
+        <section aria-labelledby="this-iphone-heading" className="gap-sm flex flex-col">
+          <h2 id="this-iphone-heading" className="text-base font-semibold">
+            This iPhone
+          </h2>
+          <div className="gap-sm flex flex-wrap items-center">
+            <span className="text-muted-foreground text-sm">
+              Its keys, Touch ID approvals, notifications and Sign out.
+            </span>
+            <button
+              type="button"
+              onClick={openNativeDeviceSettings}
+              className="px-sm border-border inline-flex min-h-11 items-center border text-sm font-medium hover:underline"
+              data-testid="this-iphone"
+            >
+              Open
+            </button>
+          </div>
+        </section>
+      ) : API_SAME_ORIGIN ? (
         <section aria-labelledby="account-heading" className="gap-sm flex flex-col">
           <h2 id="account-heading" className="text-base font-semibold">
             Account
