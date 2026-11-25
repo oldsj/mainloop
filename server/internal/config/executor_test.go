@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"fmt"
+	"net/netip"
 	"slices"
 	"strings"
 	"testing"
@@ -68,5 +69,42 @@ func TestParseExecutorOmni(t *testing.T) {
 	on["MAINLOOP_EXECUTOR_OMNI_CLUSTERS"] = "Bad_Cluster"
 	if _, err := config.ParseExecutor(on); err == nil || !strings.Contains(err.Error(), "MAINLOOP_EXECUTOR_OMNI_CLUSTERS") {
 		t.Fatalf("a bad cluster: %v", err)
+	}
+}
+
+// command.ssh needs at least one host, each a DNS-label name and an IP address with its port.
+func TestParseExecutorSSH(t *testing.T) {
+	on := map[string]string{"MAINLOOP_EXECUTOR_OP_TOKEN": "x", "MAINLOOP_EXECUTOR_SSH_ENABLED": "true"}
+	if _, err := config.ParseExecutor(on); err == nil || !strings.Contains(err.Error(), "MAINLOOP_EXECUTOR_SSH_HOSTS must name a host") {
+		t.Fatalf("err = %v", err)
+	}
+	on["MAINLOOP_EXECUTOR_SSH_HOSTS"] = " nas-01=192.0.2.20:22, ,router=[2001:db8::1]:2222 "
+	e, err := config.ParseExecutor(on)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []config.SSHHost{
+		{Name: "nas-01", Address: netip.MustParseAddrPort("192.0.2.20:22")},
+		{Name: "router", Address: netip.MustParseAddrPort("[2001:db8::1]:2222")},
+	}
+	if !slices.Equal(e.SSHHosts, want) || e.SSHDir != "/etc/mainloop-executor/ssh" {
+		t.Fatalf("hosts = %+v, dir %q", e.SSHHosts, e.SSHDir)
+	}
+	for list, msg := range map[string]string{
+		"nas-01":                                    "is not name=address:port",
+		"NAS=192.0.2.20:22":                         "is not name=address:port",
+		"nas-01=nas.example.com:22":                 "the address is an IP address and a port",
+		"nas-01=192.0.2.20":                         "the address is an IP address and a port",
+		"nas-01=192.0.2.20:0":                       "the address is an IP address and a port",
+		"nas-01=192.0.2.20:22,nas-01=192.0.2.21:22": `"nas-01" is named twice`,
+	} {
+		on["MAINLOOP_EXECUTOR_SSH_HOSTS"] = list
+		if _, err := config.ParseExecutor(on); err == nil || !strings.Contains(err.Error(), msg) {
+			t.Errorf("%s: err = %v, want %q", list, err, msg)
+		}
+	}
+	on["MAINLOOP_EXECUTOR_SSH_HOSTS"], on["MAINLOOP_EXECUTOR_SSH_DIR"] = "nas-01=192.0.2.20:22", "ssh"
+	if _, err := config.ParseExecutor(on); err == nil || !strings.Contains(err.Error(), "MAINLOOP_EXECUTOR_SSH_DIR must be an absolute path") {
+		t.Fatalf("err = %v", err)
 	}
 }

@@ -59,6 +59,8 @@ type entry struct {
 	kube bool
 	// omni types need the executor's Omni access (executor.omni in the chart).
 	omni bool
+	// ssh types need the executor's ssh access (executor.ssh in the chart).
+	ssh bool
 	// how is the card's line on what Approve does and through which credential.
 	how string
 	// normalize validates raw arguments and returns their canonical value.
@@ -116,6 +118,12 @@ var catalog = map[string]entry{
 	TypeTalosctl: {
 		version: 1, expiry: UndecidedExpiry, expiryFor: sideroExpiry(ToolTalosctl), executor: true, omni: true, how: sideroHow,
 		normalize: normalizeSidero(ToolTalosctl), preflight: preflightSidero(ToolTalosctl),
+	},
+	TypeSSH: {
+		version: 1, expiry: UndecidedExpiry, expiryFor: sshExpiry, executor: true, ssh: true,
+		how: "Approve runs exactly this command once on the host, over ssh, as its admin user with the executor's key for that host. " +
+			"Nothing previews it, and nothing on the executor's side limits what the remote shell does with it.",
+		normalize: normalizeSSH, preflight: preflightSSH,
 	},
 }
 

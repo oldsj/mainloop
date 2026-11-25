@@ -71,6 +71,14 @@ func (s *Server) privilegedTools() []Tool {
 			"reaches only its target's machines. The tools never hold the Omni key: the executor's proxy signs each request and " +
 			"refuses those whatever they send. " +
 			"Deletes, resets, shutdowns and etcd removals expire in an hour; they answer unavailable where the executor has no Omni access. " +
+			"command.ssh {target (a host's name from the executor's host allowlist, such as nas; a refusal lists them), command (the " +
+			"one line the remote user's shell runs, at most 8 KiB, no control characters), stdin (a script for sh -s, or a file's " +
+			"contents; 64 KiB), timeout_seconds} runs that command once on the host as its configured admin user, with the executor's " +
+			"key for that host, for terminal work no typed action covers (the NAS, the router, a Windows host or VM). Preflight only " +
+			"connects and checks the host's pinned key, which is checked again just before the command runs; nothing can preview " +
+			"the command. A credential in command or stdin is refused. A command naming a delete or wipe (rm, dd, mkfs, " +
+			"Remove-Item...) is tagged destructive and expires in an hour; one naming a reboot is tagged so. It answers unavailable " +
+			"where the executor has no ssh access. " +
 			"An executor type returns state requested; its card opens once the executor has checked the target. Reuse request_id to read the same request back. At most 3 requests per session " +
 			"and 10 in all wait for the owner.",
 		InputSchema: objectSchema(map[string]any{

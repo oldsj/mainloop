@@ -15,8 +15,10 @@ sends the requesting session one message with the outcome.
   `command.kubectl`, run by `serve-executor` with short-lived credentials it mints per run.
 - Slice 3, second part: the approved commands `command.omnictl` and `command.talosctl`, run by
   `serve-executor` through a proxy of its own that holds its Omni service account.
+- Slice 3, third part: the approved command `command.ssh` to a named home-network host, run by
+  `serve-executor` with its own key for that host.
 
-ssh to LAN hosts and the home-network types are later parts. They are not described here.
+The UniFi types are a later part. They are not described here.
 
 ## Enablement
 
@@ -36,6 +38,9 @@ The `k8s.*` types, `argocd.sync` and `command.kubectl` also need
 `command.omnictl` and `command.talosctl` need `MAINLOOP_PRIVILEGED_EXECUTOR_OMNI_ENABLED`, exactly
 `true`; the chart sets it with `executor.omni.enabled`, which is off by default. Without it they are
 `[unavailable]`.
+
+`command.ssh` needs `MAINLOOP_PRIVILEGED_EXECUTOR_SSH_ENABLED`, exactly `true`; the chart sets it
+with `executor.ssh.enabled`, which is off by default. Without it, it is `[unavailable]`.
 
 ## Tools
 
@@ -359,6 +364,41 @@ machine config, which holds secrets), `dmesg` and `omnictl machine-logs` (the ke
 `image pull`, `upgrade-k8s`, and every command that makes
 or reads a kubeconfig, talosconfig or service account.
 
+`command.ssh {target, command, stdin, timeout_seconds}` runs one command line on a home-network
+host, over ssh, as that host's admin user, with the executor's own key for that host.
+
+- `target` is a host's name from the executor's host allowlist (`executor.ssh.hosts`: a name and an
+  IP address with its port, such as `nas`). An address, or a name not on the list, is refused.
+- `command` is one line of at most 8 KiB, with no control or invisible characters. The remote
+  user's shell receives and interprets it, as ssh always does: it can do anything that user can.
+  `stdin` is up to 64 KiB of text that the command reads (a script for `sh -s`, a file's new
+  contents); a carriage return is allowed only before a newline, so no line can show as something
+  other than what runs. `timeout_seconds` is 1 to 600, default 60. A command or stdin that looks like it holds
+  a credential is refused (`contains_secret`): the card shows them as they are.
+- The executor's ssh client is its own (Go's `x/crypto/ssh`, no OpenSSH configuration). It accepts
+  only the host key pinned for that host, logs in with that host's key only, and asks for the
+  command and nothing else: no agent, no port or X11 forwarding, no terminal, no environment.
+  Each host's key, user and pinned host key are read for each connection.
+- **Preflight.** The executor connects, checks the host key, logs in and disconnects. Nothing runs,
+  and nothing can preview the command. The facts are the host, its address, the user and the host
+  key's fingerprint; the agent sees them without the address. A host key that is not the pinned
+  one, a refused login, or a host the executor cannot reach ends the request as `preflight_failed`,
+  with the reason, which names the host but not its address.
+- The card shows the command, its stdin, the host, user, address and host key, and tags: remote
+  shell, the user and host, and from a scan of the words, which is not a guarantee, destructive
+  (`rm`, `dd`, `mkfs`, `Remove-Item`…) and reboot or power off. A command tagged destructive waits
+  1 hour for the owner. The card says that the command's output (exit code, stdout and stderr,
+  redacted and bounded) goes back to the agent and is stored with the action.
+- **Run.** The executor connects again and checks that the host key, user and address are those the
+  owner saw. If any changed, it is `stale` and nothing runs. Then it runs the command once, with
+  the run's result as for the other commands. Only a failure before the command is sent, or the
+  host's explicit refusal of the exec request, is `failed`, "nothing ran". A connection that breaks
+  after the command was sent is `uncertain`, since the host may have started it, and it is never
+  run again. A command that ends without an exit status (a dropped connection) is `uncertain`. One
+  that runs past its timeout is `uncertain` too: the executor asks the host to kill it and closes
+  the connection, but with no terminal the host may ignore both, so the command may still be
+  running there.
+
 ## Preflight and the card
 
 Mainloop canonicalizes the arguments and writes the intent row. It then reads the target with no
@@ -579,6 +619,12 @@ boundary against an approved one:
 **Omni credentials.** With `executor.omni.enabled`, the executor reads an Omni service account's
 key (role Admin) from the Secret `executor.omni.keySecret`, key `service-account-key`, and dials
 `executor.omni.endpoint`. Only its proxy holds the key; see `command.omnictl` above.
+
+**ssh credentials.** With `executor.ssh.enabled`, each host in `executor.ssh.hosts` has a Secret
+`mainloop-executor-ssh-<name>`, with keys `private-key` (an unencrypted OpenSSH key made for the
+executor only), `user` and `known-hosts` (the host's key line, pinned; markers and hashed names
+are refused). The executor mounts each read-only and reads it for each connection, so a rotated
+key needs no restart. The executor reaches a host only if the network lets its address through.
 
 What holds is the executor's: the parser's allowlist, the namespace checks on argv, stdin and the
 dry run, the preview's object checks, and the proxy, which holds the token. Reads are not admitted, so the executor refuses commands that name its namespace

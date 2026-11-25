@@ -54,6 +54,12 @@ var installs = map[string]struct {
 		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.omni.enabled=true",
 		"executor.omni.endpoint=https://omni.example.com", "executor.omni.clusters={internal-01,lab-02}",
 	}},
+	// The same, with command.ssh on for two hosts.
+	"production-executor-ssh": {"mainloop", "ci/production-values.yaml", []string{
+		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.ssh.enabled=true",
+		"executor.ssh.hosts[0].name=nas-01", "executor.ssh.hosts[0].address=192.0.2.20:22",
+		"executor.ssh.hosts[1].name=router", "executor.ssh.hosts[1].address=192.0.2.1:2222",
+	}},
 	// Production with Apple push on (docs/specs/push-notifications.md).
 	"production-apns": {"mainloop", "ci/production-values.yaml", []string{
 		"apns.existingSecret=opencozy-apns", "apns.keyFileKey=AuthKey_ABC123DEFG.p8", "apns.topic=org.example.mainloop",

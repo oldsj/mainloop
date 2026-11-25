@@ -48,6 +48,7 @@ config:
   MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED: 'false'
   MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED: 'false'
   MAINLOOP_PRIVILEGED_EXECUTOR_OMNI_ENABLED: 'false'
+  MAINLOOP_PRIVILEGED_EXECUTOR_SSH_ENABLED: 'false'
   # Owner API authentication (docs/specs/authentication.md): observe verifies and logs what enforce
   # would refuse, and refuses nothing. serve-api will not start outside development without a mode.
   # A deployment sets enforce once it has MAINLOOP_AUTH_OIDC_* and its machine callers carry tokens.
@@ -338,6 +339,17 @@ executor:
     # prints it.
     # trunk-ignore(checkov/CKV_SECRET_6): the Secret's name, not a value
     keySecret: mainloop-executor-omni
+  # command.ssh. On, the executor runs one approved command at a time on a host listed here, over
+  # ssh with a client of its own that accepts only the host's pinned key. Each host's credential is
+  # the Secret mainloop-executor-ssh-<name>, keys private-key (an unencrypted OpenSSH key), user
+  # and known-hosts (the host's public key), mounted read-only. The pod needs egress to each
+  # address; give it a dedicated source address (podAnnotations) the router can allow per host.
+  ssh:
+    enabled: false
+    # Each host: name (a DNS label, what requests target) and address (IP:port), e.g.
+    # - name: nas-01
+    #   address: 192.0.2.20:22
+    hosts: []
   nodeSelector: {}
   affinity: {}
   tolerations: []
