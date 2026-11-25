@@ -109,7 +109,9 @@ ProxyCommand=…`) are refused; content goes in `stdin` (`kubectl apply -f -`), 
 in full. The executor fills in the target and credential flags itself. For `ssh` the remote side
 still runs the command string through the remote user's shell (that is how `ssh` works); the card
 shows the exact string the remote shell receives and is tagged `remote shell`. Windows hosts get
-the string as their OpenSSH default shell receives it.
+the string as their OpenSSH default shell receives it. As built, `command.ssh` takes that string as
+`command` (one line) plus `stdin`, not an argv: the executor's own client sends it as the exec
+request, with no local ssh, so there are no ssh flags to refuse.
 
 **Preflight.** Read-only, run before the card exists, by the same tool with the same credential
 where the tool can stay read-only, its output frozen into the facts (bounded to 16 KiB on the card,
@@ -120,14 +122,14 @@ the full output in the audit):
 | `command.kubectl`  | Derived: `kubectl diff` for `apply`/`patch`/`replace`/`set`; the same command with `--dry-run=server` for `create`/`delete`/`scale`/`label`/`annotate`; `kubectl get -o yaml` of the named objects otherwise (Secrets refused, below). Argo tracking of each named object. |
 | `command.talosctl` | As built: none. Reads need none; `apply-config` and `patch` are left out (their preview reads the machine config); the other changes have no dry run, and the card says so.                                                                                                |
 | `command.omnictl`  | `--dry-run` for `apply` and `cluster delete`, through the executor's proxy forwarding reads only; none for reads and `delete`.                                                                                                                                             |
-| `command.ssh`      | Host key matches the pinned one; then `preflight_argv` if the requester gave one (run through the same credential, so "read-only" is the requester's claim, labelled as such on the card).                                                                                 |
+| `command.ssh`      | As built: the host key matches the pinned one and the login succeeds; nothing runs. No requester preflight command: run through the same admin credential, "read-only" would be only the requester's claim, so a read is its own approved `command.ssh`.                   |
 | `http.unifi`       | `GET` of the same path.                                                                                                                                                                                                                                                    |
 
 **Binding.** The digest covers type, target, argv, stdin, preflight argv and the digest of the
 preflight output. Immediately before executing, the executor re-runs the preflight and compares
 the output digest with the frozen one; a difference fails the action as `stale` (deterministic
 preflights such as `kubectl diff` make this a real check; for `ssh` without a preflight it is only
-the host key). The agent then requests again and the owner sees the new state.
+the host key, user and address). The agent then requests again and the owner sees the new state.
 
 **What approved commands give up compared with typed actions**, stated plainly:
 
@@ -271,7 +273,7 @@ In the cluster, never on the owner's Mac: no relay on the Mac and no new public 
   process must not hold (1Password). It has **no ingress** (no Service; a NetworkPolicy denies all
   ingress): it takes work from PostgreSQL by polling every 3 seconds and writes results back. No
   workspace, Session or MCP server can reach it. The executor's tools (`kubectl`, `talosctl`,
-  `omnictl`, OpenSSH client) are pinned by version and checksum in its image.
+  `omnictl`) are pinned by version and checksum in its image.
 - **Network reach.** Two paths, because pod traffic leaving the cluster is masqueraded to the
   node's address, so the router sees the whole cluster zone and cannot tell the executor apart.
   - _Pod network_ (from the node's address): PostgreSQL, the Kubernetes API, `api.github.com`,
@@ -290,11 +292,12 @@ In the cluster, never on the owner's Mac: no relay on the Mac and no new public 
 
 ### Host allowlist
 
-A ConfigMap in `mainloop-executor`, managed in the infrastructure repository (addresses are not in
-this repository). Each entry: a name, an address, a port, a kind (`ssh`, `unifi`), the remote user,
-the pinned host-key line, and the Secret holding its credential. Illustrative names: `nas`,
-`router`, `windows-host`, `utm-vm`, `unifi`. Adding a host is a reviewed GitOps change; the
-executor reloads the ConfigMap and refuses targets not in it.
+As built for `command.ssh`: the chart's `executor.ssh.hosts`, set in the infrastructure
+repository's values (addresses are not in this repository). Each entry is a name and an IP address
+with its port; the remote user and the pinned host-key line are in that host's 1Password item with
+its key (§3), so the owner sets all three together. Illustrative names: `nas`, `router`,
+`windows-host`, `utm-vm`. Adding a host is a reviewed GitOps change that restarts the executor; it
+refuses targets not on the list. `http.unifi` gets its own entry later.
 
 ### Credentials
 
@@ -447,9 +450,12 @@ they need no network reach but Omni's endpoint and no Talos credential. The prox
 only an allowlist of resource types, refuses a type its resource definition marks sensitive, holds
 omnictl to `executor.omni.clusters` (writes, and what it shows) and talosctl to its target's
 machines as Omni lists them, and upgrades only to Sidero's images: a security review found that a
-rule over type names alone missed types that hold secrets. Then `command.ssh` and
-`http.unifi`, with the host allowlist and the egress policy, once the owner has created the items in §3
-and approved the executor's source address and its router rules (§3, Network reach).
+rule over type names alone missed types that hold secrets. A follow-up refused the types and logs
+that show the kernel command line, which may hold the SideroLink join token. `command.ssh` came
+next, with its own ssh client (Go's `x/crypto/ssh`, not OpenSSH: no client configuration to lock
+down, and nothing but the exec request is asked for) and the host allowlist; it reaches a host once
+the owner has created its item in §3 and approved the executor's source address and its router
+rules (§3, Network reach). Then `http.unifi`.
 
 **Slice 4: policy and stronger approvals.** Owner-written auto rules and "allow this target for
 24 h" (never for floor types); passkey-signed approvals, so a compromised API process cannot forge

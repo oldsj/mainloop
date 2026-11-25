@@ -118,12 +118,40 @@ spec:
                   name: {{ .omni.keySecret }}
                   key: service-account-key
             {{- end }}
+            {{- if .ssh.enabled }}
+            {{- if not .ssh.hosts }}
+            {{- fail "executor.ssh.hosts must name a host when executor.ssh.enabled is true" }}
+            {{- end }}
+            {{- $hosts := list }}
+            {{- range .ssh.hosts }}
+            {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" (toString .name)) }}
+            {{- fail (printf "executor.ssh.hosts: %q is not a DNS label" (toString .name)) }}
+            {{- end }}
+            {{- if not .address }}
+            {{- fail (printf "executor.ssh.hosts: %s has no address" .name) }}
+            {{- end }}
+            {{- $hosts = append $hosts (printf "%s=%s" .name .address) }}
+            {{- end }}
+            - name: MAINLOOP_EXECUTOR_SSH_ENABLED
+              value: "true"
+            - name: MAINLOOP_EXECUTOR_SSH_HOSTS
+              value: {{ join "," $hosts | quote }}
+            - name: MAINLOOP_EXECUTOR_SSH_DIR
+              value: /etc/mainloop-executor/ssh
+            {{- end }}
             # The root filesystem is read-only; /tmp is the only writable path.
             - name: HOME
               value: /tmp
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if .ssh.enabled }}
+            {{- range .ssh.hosts }}
+            - name: ssh-{{ .name }}
+              mountPath: /etc/mainloop-executor/ssh/{{ .name }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
           {{- with .resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -132,6 +160,22 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 256Mi
+        {{- if .ssh.enabled }}
+        {{- range .ssh.hosts }}
+        # The executor reads these fresh for each connection, so a rotated Secret needs no restart.
+        - name: ssh-{{ .name }}
+          secret:
+            secretName: mainloop-executor-ssh-{{ .name }}
+            defaultMode: 0440
+            items:
+              - key: private-key
+                path: private-key
+              - key: user
+                path: user
+              - key: known-hosts
+                path: known-hosts
+        {{- end }}
+        {{- end }}
 ---
 # Nothing connects to the executor.
 apiVersion: networking.k8s.io/v1

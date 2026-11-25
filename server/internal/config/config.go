@@ -67,6 +67,9 @@ type Config struct {
 	// PrivilegedOmniEnabled accepts command.omnictl and command.talosctl: the executor has Omni
 	// access (executor.omni in the chart).
 	PrivilegedOmniEnabled ExactTrue `env:"MAINLOOP_PRIVILEGED_EXECUTOR_OMNI_ENABLED"`
+	// PrivilegedSSHEnabled accepts command.ssh: the executor reaches home-network hosts over ssh
+	// (executor.ssh in the chart).
+	PrivilegedSSHEnabled ExactTrue `env:"MAINLOOP_PRIVILEGED_EXECUTOR_SSH_ENABLED"`
 
 	// WebFetchPerMinute bounds the open-web web_fetch tool's fetches per owner per minute, and
 	// WebFetchDenyCIDRs adds comma-separated ranges it never connects to, beyond the built-in

@@ -54,6 +54,12 @@ var installs = map[string]struct {
 		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.omni.enabled=true",
 		"executor.omni.endpoint=https://omni.example.com", "executor.omni.clusters={internal-01,lab-02}",
 	}},
+	// The same, with command.ssh on for two hosts.
+	"production-executor-ssh": {"mainloop", "ci/production-values.yaml", []string{
+		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.ssh.enabled=true",
+		"executor.ssh.hosts[0].name=nas-01", "executor.ssh.hosts[0].address=192.0.2.20:22",
+		"executor.ssh.hosts[1].name=router", "executor.ssh.hosts[1].address=192.0.2.1:2222",
+	}},
 	// Production with the preview screenshot browser on.
 	"production-screenshots": {"mainloop", "ci/production-values.yaml", []string{
 		"screenshots.enabled=true",
