@@ -28,8 +28,15 @@ to build it.
        (and type, when the card names one), it refuses and signs nothing.
     2. It opens the **approval sheet**, built only from the record it parsed: the type, every
        argument, every fact preflight froze (a diff, the current state), who asked, the expiry,
-       the action id and the digest. Control and format characters (bidi overrides, zero-width
-       characters, line separators) are shown as ⟨U+XXXX⟩, never applied.
+       the action id and the digest.
+       - A list of words, such as an `argv`, is quoted as one would type it, by the web card's
+         rule: a word of letters, digits and `-_./:=,@` as is, any other in single quotes.
+       - Every string of several lines nested in a fact, such as each change's `diff`, gets a
+         block of its own after the fact, and the fact's JSON says `⟨below: changes[0].diff⟩`
+         where it was. A diff is shown line by line, with added lines green and removed lines red.
+       - Control and format characters (bidi overrides, zero-width characters, line separators)
+         and `⟨` itself are shown as ⟨U+XXXX⟩, never applied, so the record can't imitate the
+         sheet's own markers.
     3. The sheet's **Approve** asks for Touch ID ("Approve _type_ (_action id_)", from the record),
        signs an approval token with the approval key for the record's action id and the digest the
        phone computed, and sends `Approve` with `metadata.reviewed_context` set to that digest and

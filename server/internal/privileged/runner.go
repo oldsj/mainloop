@@ -272,6 +272,8 @@ func (r *Runner) attempt(ctx context.Context, row dbq.PrivilegedAction) error {
 	if want, err := Digest(row, row.FrozenFacts); err != nil || row.Digest == nil || row.ApprovedDigest == nil ||
 		want != *row.Digest || *row.ApprovedDigest != want {
 		out = outcome{state: StateFailed, err: "the stored action no longer matches the digest the owner approved; nothing ran"}
+	} else if err := exactRow(row); err != nil {
+		out = outcome{state: StateFailed, err: "the stored action is not exactly what its type reads: " + err.Error() + "; nothing ran"}
 	} else if refused, err := r.signedApproval(ctx, row, want); err != nil {
 		return err // the lease lets the next run check again
 	} else if refused != nil && refused.earlier {

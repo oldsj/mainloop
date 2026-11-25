@@ -419,6 +419,35 @@ func actionDetailJSON(_ record: String) throws -> String {
         #expect(Vector(record: record, digest: digest) == go)
     }
 
+    @Test func argvIsQuotedAsTheWebCardQuotesIt() {
+        #expect(ActionRecord.shellQuote(["kubectl", "get", "pods", "-l", "app=web"]) == "kubectl get pods -l app=web")
+        // Two words never read as one, and a quote can't end the word early.
+        #expect(ActionRecord.shellQuote(["sh", "-c", "rm -rf /tmp/x", "it's", ""]) == #"sh -c 'rm -rf /tmp/x' 'it'\''s' ''"#)
+        let fields = ActionRecord.fields(["argv": ["talosctl", "upgrade", "--image", "a b"]])
+        #expect(fields == [.init(label: "argv", value: "talosctl upgrade --image 'a b'", kind: .command)])
+    }
+
+    @Test func aDiffInTheFactsGetsItsOwnBlock() {
+        let diff = "--- live\n+++ after\n@@ -1,2 +1,2 @@\n-replicas: 2\n+replicas: 3\n"
+        let fields = ActionRecord.fields([
+            "changes": [["name": "web", "diff": diff], ["name": "api", "note": "a\nb"]],
+            "cluster": "lab-01",
+            "preview": "line one\nline two",
+        ])
+        #expect(fields.map(\.label) == ["changes", "changes[0].diff", "changes[1].note", "cluster", "preview"])
+        #expect(fields[0].value.contains(#""diff" : "⟨below: changes[0].diff⟩""#))
+        #expect(fields[0].value.contains(#""note" : "⟨below: changes[1].note⟩""#))
+        #expect(fields[1] == .init(label: "changes[0].diff", value: diff, kind: .diff))
+        #expect(fields[2].kind == .lines)
+        #expect(fields[4] == .init(label: "preview", value: "line one\nline two", kind: .lines))
+    }
+
+    @Test func theRecordCannotImitateTheSheetsMarkers() {
+        let fields = ActionRecord.fields(["changes": [["diff": "-a\n+b"], ["note": "⟨below: changes[0].diff⟩"]]])
+        #expect(fields[0].value.contains("⟨U+27E8⟩below"))
+        #expect(fields[0].value.components(separatedBy: "⟨below:").count == 2)
+    }
+
     @Test func hiddenCharactersAreShown() {
         #expect(ActionRecord.visible("a\u{202E}b\u{200B}c\u{2028}d\u{07}e\nf\tg") == "a⟨U+202E⟩b⟨U+200B⟩c⟨U+2028⟩d⟨U+0007⟩e\nf\tg")
         #expect(ActionRecord.visible("café 🚀") == "café 🚀")
