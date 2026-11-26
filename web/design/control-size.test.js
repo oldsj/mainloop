@@ -24,7 +24,8 @@ describe('control size', () => {
     const values = [...css.matchAll(/--spacing-control: ([^;]+);/g)].map((m) => m[1]);
     expect(values).toEqual([touch.$value, pointer.$value]);
     const media = /@media ([^{]+) \{\s*:root \{[^}]*?--spacing-control: ([^;]+);/.exec(css);
-    expect(media?.[1]).toBe(DESKTOP_POINTER_QUERY);
+    // The generator wraps a long query list one query per line, as the formatter does.
+    expect(media?.[1].replace(/,\s+/g, ', ')).toBe(DESKTOP_POINTER_QUERY);
     expect(media?.[2]).toBe(pointer.$value);
   });
 });

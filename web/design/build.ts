@@ -93,6 +93,19 @@ const REQUIRED_TOKENS = [
 const POINTER_QUERY =
   '(min-width: 1024px) and (pointer: fine), (min-width: 640px) and (min-height: 640px) and (pointer: fine)';
 
+/**
+ * An `@media` line as the formatter writes it: on one line when it fits, otherwise one query of the
+ * list per line, indented by two, so formatting leaves the generated file alone.
+ */
+function mediaRule(query: string): string[] {
+  const line = `@media ${query} {`;
+  if (line.length <= PRINT_WIDTH) return [line];
+  const parts = query.split(', ');
+  return parts.map((part, i) =>
+    i === 0 ? `@media ${part},` : i === parts.length - 1 ? `  ${part} {` : `  ${part},`
+  );
+}
+
 const TOKEN_KEYS = ['$value', '$type', '$description', '$extensions'];
 const GROUP_KEYS = ['$type', '$description', '$extensions'];
 const TYPES = new Set([
@@ -526,7 +539,7 @@ if (errors.length > 0 || !source) {
       '}',
       '',
       '/* Controls and body type are touch-sized by default and compact on a wide screen with a fine pointer. */',
-      `@media ${POINTER_QUERY} {`,
+      ...mediaRule(POINTER_QUERY),
       '  :root {',
       ...indent(indent(pointerRoot)),
       '  }',
