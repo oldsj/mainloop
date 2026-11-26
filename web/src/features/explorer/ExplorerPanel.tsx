@@ -111,7 +111,9 @@ export function ExplorerSidebar({
       aria-label="Sidebar"
       data-testid="explorer-aside"
       style={{ width: dragWidth ?? prefs.width }}
-      className="border-border-subtle relative flex min-h-0 shrink-0 flex-col border-r"
+      // At most 40% of the shell, so the page keeps room on a narrow desktop layout (a tablet, or
+      // iPhone Duo's inner display).
+      className="border-border-subtle relative flex min-h-0 max-w-[40%] shrink-0 flex-col border-r"
     >
       <AgentColumn
         model={column.model}

@@ -32,8 +32,32 @@ export function resolveTab(tab: ShellSearch['tab']): Tab {
   return 'explorer';
 }
 
-/** Desktop layout starts here (Tailwind `lg`), as the frozen app did. */
-export const DESKTOP_QUERY = '(min-width: 1024px)';
+/**
+ * The desktop layout (activity bar, sidebar, page) needs a window at least 1024 px wide (Tailwind
+ * `lg`), or one at least 640 px on both sides: a tablet, a small browser window, or iPhone Duo's
+ * inner display (669 × 951 points, either way up). A phone is under 640 px one way or the other in
+ * either orientation, as is iPhone Duo's outer display (466 × 678), so it keeps the compact layout.
+ */
+export const DESKTOP_WIDE = 1024;
+export const DESKTOP_SIDE = 640;
+const DESKTOP_ALTERNATIVES = [
+  `(min-width: ${DESKTOP_WIDE}px)`,
+  `(min-width: ${DESKTOP_SIDE}px) and (min-height: ${DESKTOP_SIDE}px)`
+];
+export const DESKTOP_QUERY = DESKTOP_ALTERNATIVES.join(', ');
+/**
+ * The desktop layout used with a mouse or trackpad, where controls and body type are compact
+ * (web/design/build.ts writes it into theme.css). Each alternative carries `(pointer: fine)`: in a
+ * media query list, `and` binds only to its own alternative.
+ */
+export const DESKTOP_POINTER_QUERY = DESKTOP_ALTERNATIVES.map(
+  (q) => `${q} and (pointer: fine)`
+).join(', ');
+
+/** What `DESKTOP_QUERY` matches, for a viewport of `width` × `height` CSS pixels. */
+export function isDesktopViewport(width: number, height: number): boolean {
+  return width >= DESKTOP_WIDE || (width >= DESKTOP_SIDE && height >= DESKTOP_SIDE);
+}
 
 /** `?view=` overrides the viewport; otherwise wide screens get the desktop shell. */
 export function resolveView(requested: View | undefined, isWide: boolean): View {

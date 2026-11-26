@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { DESKTOP_QUERY } from '../src/shell/view.ts';
+import { DESKTOP_POINTER_QUERY } from '../src/shell/view.ts';
 
 // The control size contract, read from the token source and the generated theme: touch-sized by
 // default, compact only in the desktop layout with a mouse or trackpad. Components reach it
@@ -24,7 +24,8 @@ describe('control size', () => {
     const values = [...css.matchAll(/--spacing-control: ([^;]+);/g)].map((m) => m[1]);
     expect(values).toEqual([touch.$value, pointer.$value]);
     const media = /@media ([^{]+) \{\s*:root \{[^}]*?--spacing-control: ([^;]+);/.exec(css);
-    expect(media?.[1]).toBe(`${DESKTOP_QUERY} and (pointer: fine)`);
+    // The generator wraps a long query list one query per line, as the formatter does.
+    expect(media?.[1].replace(/,\s+/g, ', ')).toBe(DESKTOP_POINTER_QUERY);
     expect(media?.[2]).toBe(pointer.$value);
   });
 });
