@@ -55,7 +55,8 @@ export function StatusBar({
       data-testid="status-bar"
       data-offline={offline ? 'true' : undefined}
       className={cn(
-        'border-border-subtle gap-md px-sm text-caption flex h-6 shrink-0 items-center border-t',
+        // Clear of the home indicator on a touch screen: the bar grows by the bottom inset.
+        'border-border-subtle gap-md px-sm text-caption flex h-[calc(1.5rem+env(safe-area-inset-bottom,0px))] shrink-0 items-center border-t pb-[env(safe-area-inset-bottom,0px)]',
         offline ? 'bg-destructive text-destructive-foreground' : 'bg-card text-muted-foreground'
       )}
     >

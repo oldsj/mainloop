@@ -81,9 +81,9 @@ History before `e776537` describes the retired Python backend. Where other text 
 
 Sessions appear as agents, not in a list of their own: a task's session is that task's agent
 in its project's group, and a live session with no task is an agent of its own (see
-[layout](layout.md)). The main thread and the agents are a sidebar on the left at widths of 1024px and
-above, and a list opened from the bottom bar on narrower windows, where one conversation fills the
-screen. Task detail scrolls within the available pane; workspace
+[layout](layout.md)). The main thread and the agents are a sidebar on the left in the desktop layout
+(a window at least 1024px wide, or at least 640px on both sides; see [layout](layout.md#desktop)),
+and a list opened from the bottom bar on smaller windows, where one conversation fills the screen. Task detail scrolls within the available pane; workspace
 controls wrap when needed.
 
 The native main thread is pinned above the agents rather than listed among them, and archived
