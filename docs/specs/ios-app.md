@@ -170,11 +170,11 @@ code signed is checked by the server's verifier in Go (`server/internal/auth/tes
 has run on a phone, against Pocket ID or against a Mainloop server, and no notification has been
 delivered through APNs.
 
-On iPhone Duo, only the simulator's outer display has been looked at. Opening and closing it
-need Device Hub's window, so the app hasn't been seen at the inner display's own size. On the
-outer display the web view's page gets the status bar's inset on the right, and the native screens
-stay clear of it. The web app's two layouts at the Duo's sizes were checked in a browser, not on
-the device.
+On iPhone Duo, the app has been seen only in the simulator and only at 466 × 678 points, the outer
+display's size, even where the simulator drew it on the 2007-pixel panel. Opening and closing the
+device need Device Hub's window, so the inner display's own size (669 × 951) is unseen. At
+466 × 678 the page gets the status bar's inset on the right and the native screens stay clear of
+it. The web app's two layouts at the Duo's sizes were checked in a browser, not on the device.
 
 Approvals are tested with software keys: the sheet opens on the record the phone hashed, the
 respond body carries that digest whatever the page sent, a record for another action is refused
