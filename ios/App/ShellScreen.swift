@@ -71,6 +71,8 @@ final class ShellModel {
         view.isOpaque = false
         view.backgroundColor = Theme.uiBackground
         view.scrollView.backgroundColor = Theme.uiBackground
+        // The page places itself inside the safe area; the scroll view adds no insets of its own.
+        view.scrollView.contentInsetAdjustmentBehavior = .never
         #if DEBUG
             view.isInspectable = true
         #endif
@@ -320,7 +322,10 @@ struct ShellScreen: View {
     var body: some View {
         ZStack {
             Theme.background.ignoresSafeArea()
+            // Edge to edge: the page declares viewport-fit=cover and pads itself with
+            // env(safe-area-inset-*), including iPhone Duo's status bar column on the right edge.
             WebView(view: shell.webView)
+                .ignoresSafeArea()
                 .opacity(shell.loaded ? 1 : 0)
             switch shell.state {
             case .unavailable(let message):

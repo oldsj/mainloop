@@ -81,6 +81,15 @@ software approval key, which asks for nothing.
   view's data, unregisters from APNs and clears the badge and delivered notifications. Offline,
   the keys and data are still deleted.
 
+### iPhone Duo
+
+The app fills both displays in every pose. Native screens stay in the safe area and size by the
+space they have (no idiom, orientation or screen checks). The web view runs edge to edge: the page
+pads itself with `env(safe-area-inset-*)`, including the status bar's column on the right edge of
+the inner display. The web app shows its desktop layout on the inner display and its phone layout
+on the outer one ([layout](layout.md#desktop)). See [ios/README.md](../../ios/README.md#iphone-duo)
+for the App Store's iPhone Duo screenshots.
+
 ### Approving a privileged action
 
 Approve on a privileged-action card in the web app asks the app; the page sends no Approve itself.
@@ -160,6 +169,12 @@ CI but not driven by a test. Request signing is tested with software keys, and a
 code signed is checked by the server's verifier in Go (`server/internal/auth/testdata`). Nothing
 has run on a phone, against Pocket ID or against a Mainloop server, and no notification has been
 delivered through APNs.
+
+On iPhone Duo, the app has been seen only in the simulator and only at 466 × 678 points, the outer
+display's size, even where the simulator drew it on the 2007-pixel panel. Opening and closing the
+device need Device Hub's window, so the inner display's own size (669 × 951) is unseen. At
+466 × 678 the page gets the status bar's inset on the right and the native screens stay clear of
+it. The web app's two layouts at the Duo's sizes were checked in a browser, not on the device.
 
 Approvals are tested with software keys: the sheet opens on the record the phone hashed, the
 respond body carries that digest whatever the page sent, a record for another action is refused
