@@ -151,7 +151,8 @@
 }
 
 /* Controls and body type are touch-sized by default and compact on a wide screen with a fine pointer. */
-@media (min-width: 1024px) and (pointer: fine) {
+@media (min-width: 1024px) and (pointer: fine),
+  (min-width: 640px) and (min-height: 640px) and (pointer: fine) {
   :root {
     --text-body: 0.8125rem;
     --text-field: 0.8125rem;

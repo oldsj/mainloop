@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DESKTOP_POINTER_QUERY,
   DESKTOP_QUERY,
   isDesktopViewport,
   resolveTab,
@@ -36,6 +37,12 @@ describe('isDesktopViewport', () => {
 
   it('is the media query the shell listens to', () => {
     expect(DESKTOP_QUERY).toBe('(min-width: 1024px), (min-width: 640px) and (min-height: 640px)');
+  });
+
+  it('has a pointer variant with (pointer: fine) on every alternative', () => {
+    expect(DESKTOP_POINTER_QUERY).toBe(
+      '(min-width: 1024px) and (pointer: fine), (min-width: 640px) and (min-height: 640px) and (pointer: fine)'
+    );
   });
 });
 

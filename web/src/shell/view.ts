@@ -40,7 +40,19 @@ export function resolveTab(tab: ShellSearch['tab']): Tab {
  */
 export const DESKTOP_WIDE = 1024;
 export const DESKTOP_SIDE = 640;
-export const DESKTOP_QUERY = `(min-width: ${DESKTOP_WIDE}px), (min-width: ${DESKTOP_SIDE}px) and (min-height: ${DESKTOP_SIDE}px)`;
+const DESKTOP_ALTERNATIVES = [
+  `(min-width: ${DESKTOP_WIDE}px)`,
+  `(min-width: ${DESKTOP_SIDE}px) and (min-height: ${DESKTOP_SIDE}px)`
+];
+export const DESKTOP_QUERY = DESKTOP_ALTERNATIVES.join(', ');
+/**
+ * The desktop layout used with a mouse or trackpad, where controls and body type are compact
+ * (web/design/build.ts writes it into theme.css). Each alternative carries `(pointer: fine)`: in a
+ * media query list, `and` binds only to its own alternative.
+ */
+export const DESKTOP_POINTER_QUERY = DESKTOP_ALTERNATIVES.map(
+  (q) => `${q} and (pointer: fine)`
+).join(', ');
 
 /** What `DESKTOP_QUERY` matches, for a viewport of `width` × `height` CSS pixels. */
 export function isDesktopViewport(width: number, height: number): boolean {

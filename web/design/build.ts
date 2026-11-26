@@ -88,8 +88,10 @@ const REQUIRED_TOKENS = [
 ];
 
 // A control's size has two values. `touch` is the default; `pointer` replaces it inside this query:
-// the desktop layout (DESKTOP_QUERY in web/src/shell/view.ts) used with a mouse or trackpad.
-const POINTER_QUERY = '(min-width: 1024px) and (pointer: fine)';
+// the desktop layout used with a mouse or trackpad. It is DESKTOP_POINTER_QUERY in
+// web/src/shell/view.ts, and design/control-size.test.js checks the two agree.
+const POINTER_QUERY =
+  '(min-width: 1024px) and (pointer: fine), (min-width: 640px) and (min-height: 640px) and (pointer: fine)';
 
 const TOKEN_KEYS = ['$value', '$type', '$description', '$extensions'];
 const GROUP_KEYS = ['$type', '$description', '$extensions'];
