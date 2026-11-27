@@ -80,5 +80,5 @@ session, with the last report in its brief.
   `requireApproval`. The harness pauses before each call, and the pause surfaces as an approval
   request on the task, the same human-in-the-loop path as other approval cards. The tool server
   holds the write credentials. Merges to the infrastructure repository stay human.
-- Home Assistant and OpenCozy go to main, not the ops agent, read-only: see
+- Home Assistant and OpenCozy go to main, not the ops agent, with approval cards on the risky calls: see
   [home tools](home-tools.md).
