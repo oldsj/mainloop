@@ -33,6 +33,7 @@ export function OwnerDotfilesSection() {
   const save = useSetOwnerDotfiles();
   return (
     <section
+      id="dotfiles"
       aria-labelledby="dotfiles-heading"
       className="gap-md flex flex-col"
       data-testid="dotfiles"

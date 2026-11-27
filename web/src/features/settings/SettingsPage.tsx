@@ -7,6 +7,7 @@ import { ThemeSelector } from '@/shell/ThemeSelector';
 import { OwnerDotfilesSection } from '@/features/dotfiles/DotfilesSection';
 import { DevicesSection } from './DevicesSection';
 import { ImportProjectSection } from './ImportProjectSection';
+import { OwnerMemorySection } from './OwnerMemorySection';
 import { SessionDefaultsSection } from './SessionDefaultsSection';
 
 /** Settings: what the owner sets once and Mainloop then applies everywhere. */
@@ -15,6 +16,7 @@ export function SettingsPage() {
     <div className={cn(PAGE, 'gap-lg')} data-testid="settings-page">
       <PageHeader title="Settings" />
       <SessionDefaultsSection />
+      <OwnerMemorySection />
       <OwnerDotfilesSection />
       <ImportProjectSection />
       <DevicesSection />

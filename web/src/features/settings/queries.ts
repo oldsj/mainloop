@@ -34,3 +34,48 @@ export function useRevokeDevice() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: keys.devices() })
   });
 }
+
+/** The owner's memory: open entries, totals and the review window (docs/specs/owner-memory.md). */
+export function useOwnerMemory() {
+  return $api.useQuery('get', '/owner/memory');
+}
+
+/**
+ * The owner's memory and what reads it: a decision or a new review window changes the memory, the
+ * Needs-you item that counts what waits, and (for a move) the project's memory.
+ */
+function useOwnerMemoryInvalidation() {
+  const queryClient = useQueryClient();
+  const key = $api.queryOptions('get', '/owner/memory').queryKey;
+  return (projectId?: string) =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: key }),
+      queryClient.invalidateQueries({ queryKey: keys.attention() }),
+      projectId
+        ? queryClient.invalidateQueries({
+            queryKey: $api.queryOptions('get', '/projects/{project_id}/memory', {
+              params: { path: { project_id: projectId } }
+            }).queryKey
+          })
+        : undefined
+    ]);
+}
+
+/**
+ * Decides one entry. Settled either way, the memory is read again, so a refusal (an entry decided
+ * elsewhere, memory that would pass its bound, a full project memory) shows what is current.
+ */
+export function useDecideOwnerMemory() {
+  const invalidate = useOwnerMemoryInvalidation();
+  return $api.useMutation('post', '/owner/memory/{entry_id}/decision', {
+    onSettled: (_data, _error, variables) => invalidate(variables.body.project_id)
+  });
+}
+
+/** Saves the review window. Every entry's due date moves with it, so the memory is read again. */
+export function useSetOwnerMemorySettings() {
+  const invalidate = useOwnerMemoryInvalidation();
+  return $api.useMutation('put', '/owner/memory/settings', {
+    onSettled: () => invalidate()
+  });
+}

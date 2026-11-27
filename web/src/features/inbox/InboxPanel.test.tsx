@@ -294,6 +294,27 @@ describe('Needs you', () => {
     );
   });
 
+  it('lists the owner memory review as a decision and links it to Settings', async () => {
+    const review = attentionItem(queueItem(), {
+      id: 'owner-memory:dev-user',
+      kind: 'review',
+      queue_item: null,
+      task_id: null,
+      href: '/settings#memory',
+      title: 'Owner memory',
+      needed: '2 owner memory proposals and 1 entry to review.'
+    });
+    server.use(attentionRead(() => HttpResponse.json(attentionSnapshot([review]))));
+    renderInbox();
+    expect(
+      await screen.findByText('2 owner memory proposals and 1 entry to review.')
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Review in Settings' })).toHaveAttribute(
+      'href',
+      '/settings#memory'
+    );
+  });
+
   it('links a stalled turn to its thread', async () => {
     const main = attentionItem(queueItem(), {
       id: 'stalled:msg-1',

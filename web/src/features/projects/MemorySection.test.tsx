@@ -26,7 +26,13 @@ const PROPOSAL = memoryEntry({
   text: 'Deploys need a canary.',
   state: 'proposed',
   author: 'task',
-  source: { session_id: 'sup-1', task_id: 'task-7', attempt_id: 'att-1', delivery_id: null },
+  source: {
+    session_id: 'sup-1',
+    task_id: 'task-7',
+    attempt_id: 'att-1',
+    delivery_id: null,
+    owner_entry_id: null
+  },
   replaces_id: 'mem-1',
   decided_at: null
 });
