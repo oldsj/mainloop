@@ -86,7 +86,12 @@ workspace offline, with each of `GOMODCACHE`, `GOCACHE`, `pnpm_config_store_dir`
 only if the commit is still the head of `main`. Because the smoke step runs on the
 workspace node, the node already holds the image when environments start following it.
 
-The tags (`cache-<sha>`, one per build) are not pruned yet.
+The registry prunes old per-build tags (`cache-<sha>`, `dev-<inputs>` and the `cache-in-<key>`
+markers) by a retention policy in the infrastructure repository (`k8s/apps/zot`). The policy keeps
+`cache-main` and `cache-main-amd64`, the newest builds of each arch, any image pulled in the last
+two weeks, and the tags pinned by live workspaces, which are listed by hand. Garbage collection
+then frees the blobs that no remaining tag uses. Follow the moving tag. An environment version
+pinned to an older build can stop being pullable.
 
 ## Production application images
 

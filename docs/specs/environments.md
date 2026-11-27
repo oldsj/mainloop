@@ -128,6 +128,11 @@ baked `/opt/cache`; only what a session wrote into `/opt/cache` is lost.
 Follow-up: every accepted digest leaves a runtime template and golden snapshot in the
 runtime until its own retention exists; the interval above bounds how fast they grow.
 
+The registry that serves the in-cluster cache image prunes its old per-build tags (see
+`.github/README.md`). An environment that follows `cache-main` always resolves to a current
+image. A version that is selected explicitly, or a workspace pinned to an old build, depends on
+that build's tag still being kept.
+
 ## Project selection and sharing
 
 Selection accepts `environment_id` and either `version_id` or
