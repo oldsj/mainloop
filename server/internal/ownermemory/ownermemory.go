@@ -552,7 +552,7 @@ func (w *writer) moveToProject(ctx context.Context, q *dbq.Queries, row dbq.Owne
 }
 
 // Lapse moves every active entry of the owner whose review window and grace have both run out by
-// now to lapsed, at one new sequence number, inside the caller's transaction. It is the attention
+// now to lapsed, each at a new sequence number, inside the caller's transaction. It is the attention
 // sweep's first step, and returns the lapsed entries' ids.
 func Lapse(ctx context.Context, q *dbq.Queries, owner string, now time.Time) ([]string, error) {
 	params := dbq.ListLapsingOwnerMemoryParams{UserID: owner, GraceDays: GraceDays, Now: now}
@@ -570,6 +570,9 @@ func Lapse(ctx context.Context, q *dbq.Queries, owner string, now time.Time) ([]
 	}
 	ids := make([]string, 0, len(due))
 	for _, row := range due {
+		// One sequence number per entry, so every step a running session is told of is small
+		// enough to fit its context block whole (see UpdateSince).
+		w.advanced = false
 		if _, err := w.end(ctx, row, StateLapsed, now.UTC(), nil, nil); err != nil {
 			return nil, err
 		}

@@ -182,16 +182,60 @@ func TestReplacingAndPinnedRenders(t *testing.T) {
 	}
 
 	// A running session that had seq1 gets the change once; one with none gets the section.
-	up, err := ownermemory.UpdateSince(ctx, q, owner, true, seq1)
-	if err != nil || !up.Changed || up.Seq != cur ||
-		up.Text != "## Owner memory changes\n- New: Prefer spaces. (owner memory "+p.ID+", confirmed 2026-11-04)\n- Removed: Prefer tabs. (owner memory "+old.ID+")\n" {
+	up, err := ownermemory.UpdateSince(ctx, q, owner, true, seq1, room)
+	if err != nil || !up.Changed || up.Seq != cur || up.More ||
+		up.Text != "## Owner memory changes\n- Removed: Prefer tabs. (owner memory "+old.ID+")\n- New: Prefer spaces. (owner memory "+p.ID+", confirmed 2026-11-04)\n" {
 		t.Fatalf("update = %+v, %v", up, err)
 	}
-	if up, _ := ownermemory.UpdateSince(ctx, q, owner, true, cur); up.Changed || up.Text != "" {
+	if up, _ := ownermemory.UpdateSince(ctx, q, owner, true, cur, room); up.Changed || up.Text != "" {
 		t.Fatalf("no change = %+v", up)
 	}
-	if up, _ := ownermemory.UpdateSince(ctx, q, owner, false, 0); !up.Changed || !strings.HasPrefix(up.Text, "## Owner memory\n") {
+	if up, _ := ownermemory.UpdateSince(ctx, q, owner, false, 0, room); !up.Changed || !strings.HasPrefix(up.Text, "## Owner memory\n") {
 		t.Fatalf("none given = %+v", up)
+	}
+}
+
+// room is a whole block's room for owner memory, with no project part.
+var room = projectcontext.Room("")
+
+// TestAnUpdateThatDoesNotFitRecordsOnlyWhatWasGiven: when the changes since what a session had do
+// not fit the room left in its block, the update brings it to the newest sequence whose changes
+// fit whole, removals first, and says more is left; with no step fitting it gives nothing, so the
+// next message carries it all.
+func TestAnUpdateThatDoesNotFitRecordsOnlyWhatWasGiven(t *testing.T) {
+	svc, pool, _ := newService(t)
+	ctx := context.Background()
+	q := dbq.New(pool)
+	gone := mustRemember(t, svc, mainSession, "Forget me: "+strings.Repeat("g", 400), "")
+	given, _ := ownermemory.Seq(ctx, q, owner)
+	if _, err := svc.Forget(ctx, mainSession, gone.ID); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 4 {
+		mustRemember(t, svc, mainSession, strings.Repeat(string(rune('a'+i)), 480), "")
+	}
+	cur, _ := ownermemory.Seq(ctx, q, owner)
+	removed := "- Removed: " + gone.Text + " (owner memory " + gone.ID + ")\n"
+
+	whole, err := ownermemory.UpdateSince(ctx, q, owner, true, given, 1<<20)
+	if err != nil || !whole.Changed || whole.Seq != cur || whole.More || !strings.HasPrefix(whole.Text, "## Owner memory changes\n"+removed) {
+		t.Fatalf("whole = %+v, %v", whole, err)
+	}
+	up, err := ownermemory.UpdateSince(ctx, q, owner, true, given, room)
+	if err != nil || !up.Changed || !up.More || up.Seq <= given || up.Seq >= cur || len(up.Text) > room ||
+		!strings.HasPrefix(up.Text, "## Owner memory changes\n"+removed) {
+		t.Fatalf("cut = %+v, %v", up, err)
+	}
+	// What it left goes next time, from the sequence it recorded.
+	if next, _ := ownermemory.UpdateSince(ctx, q, owner, true, up.Seq, room); !next.Changed || next.Seq <= up.Seq || strings.Contains(next.Text, "Removed") {
+		t.Fatalf("next = %+v", next)
+	}
+	if none, _ := ownermemory.UpdateSince(ctx, q, owner, true, given, 100); none.Changed || !none.More || none.Seq != given || none.Text != "" {
+		t.Fatalf("nothing fits = %+v", none)
+	}
+	block := projectcontext.Block(up.Text, up.More)
+	if len(block) > projectcontext.MaxUpdateBytes || !strings.Contains(block, removed) || !strings.HasSuffix(block, "call `project_context` and `owner_memory` for the current context.\n") {
+		t.Fatalf("block = %q", block)
 	}
 }
 
@@ -279,5 +323,27 @@ func TestMovingAnEntry(t *testing.T) {
 	}
 	if m, _ := svc.Memory(ctx); len(m.Entries) != 0 {
 		t.Fatalf("open after moves = %+v", m.Entries)
+	}
+}
+
+// TestMovingOntoAProjectProposalAcceptsIt: a move whose text a project proposal already holds
+// accepts that proposal as the moved entry instead of adding a second, active copy.
+func TestMovingOntoAProjectProposalAcceptsIt(t *testing.T) {
+	svc, pool, _ := newService(t)
+	ctx := context.Background()
+	pc := &projectcontext.Service{Pool: pool, OwnerID: owner}
+	prop, err := pc.Remember(ctx, "p1", projectcontext.Recorder{Author: projectcontext.AuthorTask,
+		Source: projectcontext.Source{SessionID: ptr("sup-1"), TaskID: ptr("t-1"), AttemptID: ptr("a-1")}}, "Use fictional data in demos.", "")
+	if err != nil || prop.State != projectcontext.StateProposed {
+		t.Fatalf("proposal = %+v, %v", prop, err)
+	}
+	e := mustRemember(t, svc, mainSession, "Use fictional data in demos.", "")
+	moved, err := svc.Decide(ctx, e.ID, ownermemory.DecisionMoveToProject, "p1")
+	if err != nil || moved.State != ownermemory.StateMoved || moved.MovedToEntryID == nil || *moved.MovedToEntryID != prop.ID {
+		t.Fatalf("move = %+v, %v; want it to name proposal %s", moved, err, prop.ID)
+	}
+	pm, err := pc.Memory(ctx, "p1")
+	if err != nil || len(pm.Entries) != 1 || pm.Entries[0].ID != prop.ID || pm.Entries[0].State != projectcontext.StateActive {
+		t.Fatalf("project memory = %+v, %v; want the one proposal, now active", pm.Entries, err)
 	}
 }

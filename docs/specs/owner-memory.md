@@ -190,7 +190,11 @@ changes` part of the `[mainloop:context]` block (formerly `[mainloop:project-con
   gets the same block in front of a later message, and the whole section inside its context block
   when that is rendered again. A session that was given no owner memory gets the whole
   `## Owner memory` section in the block instead of the changes. What a session has is recorded on the delivery
-  (`deliveries.given_owner_memory_seq`). The block's 2 KiB cap is shared.
+  (`deliveries.given_owner_memory_seq`). The block's 2 KiB cap is shared: owner memory gets what the
+  project part leaves, lists removals before new entries, and brings the session only to the newest
+  sequence whose changes fit whole, so the recorded sequence is always one the session was told all
+  of. The rest goes with the next message, and the block ends with the cut note. Each change to the
+  set (a lapse included, one entry at a time) takes its own sequence, so one change always fits.
 
 Rendered as:
 
@@ -238,7 +242,8 @@ project** on an active or lapsed entry asks for one of the owner's projects and,
 transaction under the owner's and the project's memory locks, adds the text to that project's
 memory as an active entry and ends the owner entry as `moved`. The new project entry's source
 names the owner entry it came from, and the owner entry records the project entry it became. If
-the project's active memory would pass its 4096 bytes, the move is refused (409 `memory_full`) and
+the project already has an open entry with the same text, the move answers it instead of adding
+a second copy: an active one as it is, a proposal accepted as the moved entry. If the project's active memory would pass its 4096 bytes, the move is refused (409 `memory_full`) and
 changes nothing. Both memories take a new sequence number, so running sessions are told of the
 removal and, in that project, of the new entry.
 

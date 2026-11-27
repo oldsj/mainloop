@@ -128,7 +128,7 @@ type Change struct {
 }
 
 // Render writes the change alone as the block a session gets in front of its next message.
-func (c Change) Render() string { return Block(c.Body()) }
+func (c Change) Render() string { return Block(c.Body(), false) }
 
 // Body writes the change's sections without the block's opening line, "" when there is nothing to
 // say.
@@ -150,12 +150,24 @@ func (c Change) Body() string {
 }
 
 // Block opens body, the sections of what changed (project and owner memory alike), with the
-// marker line, and cuts it to MaxUpdateBytes; "" for an empty body.
-func Block(body string) string {
-	if body == "" {
+// marker line, and cuts it to MaxUpdateBytes; "" for an empty body with nothing more. more says
+// that a part was left out on purpose (sent with a later message), so the block ends with the cut
+// note even when it fits.
+func Block(body string, more bool) string {
+	if body == "" && !more {
 		return ""
 	}
-	return capBlock(UpdateMarker + updateHeader + body)
+	block := UpdateMarker + updateHeader + body
+	if more && len(block)+len(updateCut) <= MaxUpdateBytes {
+		return block + updateCut
+	}
+	return capBlock(block)
+}
+
+// Room is how many bytes a block whose sections so far are body has left for more, keeping room
+// for the cut note, so whatever fits in it is sent whole.
+func Room(body string) int {
+	return MaxUpdateBytes - len(UpdateMarker) - len(updateHeader) - len(body) - len(updateCut)
 }
 
 func renderInstructions(b *strings.Builder, old, cur Instructions) {

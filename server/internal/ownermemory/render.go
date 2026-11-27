@@ -80,25 +80,26 @@ func (l Line) render() string {
 	return fmt.Sprintf("%s (owner memory %s, confirmed %s)", l.Text, l.ID, l.ConfirmedAt.UTC().Format(time.DateOnly))
 }
 
-// Changes renders what is active after and was not before, and the reverse, as the
-// "## Owner memory changes" part of a running session's context block, or "" when the set of
-// entries is the same (a confirmation alone changes only a date).
+// Changes renders what stopped being active since before, then what is active after and was not
+// before, as the "## Owner memory changes" part of a running session's context block, or "" when
+// the set of entries is the same (a confirmation alone changes only a date). Removals go first:
+// an entry a session must stop following matters more than one it has not seen yet.
 func Changes(before, after []Line) string {
-	was := make(map[string]bool, len(before))
-	for _, l := range before {
-		was[l.ID] = true
-	}
 	is := make(map[string]bool, len(after))
-	var b strings.Builder
 	for _, l := range after {
 		is[l.ID] = true
-		if !was[l.ID] {
-			b.WriteString("- New: " + l.render() + "\n")
-		}
 	}
+	was := make(map[string]bool, len(before))
+	var b strings.Builder
 	for _, l := range before {
+		was[l.ID] = true
 		if !is[l.ID] {
 			fmt.Fprintf(&b, "- Removed: %s (owner memory %s)\n", l.Text, l.ID)
+		}
+	}
+	for _, l := range after {
+		if !was[l.ID] {
+			b.WriteString("- New: " + l.render() + "\n")
 		}
 	}
 	if b.Len() == 0 {
@@ -107,19 +108,27 @@ func Changes(before, after []Line) string {
 	return "## Owner memory changes\n" + b.String()
 }
 
-// Update is the owner memory part of a session's next message. Changed is whether the session's
-// owner memory moved since what it was given (nothing given counts as sequence 0); only then does
-// the delivery record Seq, the owner's current sequence. Text is the whole section for a session
-// that had none, else the changes since, and "" when nothing it reads changed.
+// Update is the owner memory part of a session's next message. Changed is whether the delivery
+// gives the session newer owner memory than it had (nothing given counts as sequence 0); only then
+// does it record Seq, the sequence Text brings the session to. Text is the whole section for a
+// session that had none, else the changes since, and "" when nothing it reads changed. More is
+// set when Seq is short of the owner's current sequence: the rest goes with a later message.
 type Update struct {
 	Changed bool
 	Seq     int64
 	Text    string
+	More    bool
 }
 
+// maxSteps bounds how many sequence numbers past what a session was given UpdateSince looks at.
+const maxSteps = 200
+
 // UpdateSince renders the owner memory part of the next message of a session that was given seq
-// (given false: none at all).
-func UpdateSince(ctx context.Context, q *dbq.Queries, owner string, given bool, seq int64) (Update, error) {
+// (given false: none at all), in at most room bytes. It brings the session to the newest sequence
+// whose rendering fits whole, so the sequence recorded is always one the session was told all of;
+// what is left goes next time. With no step fitting, it gives nothing and sets More. A single step
+// changes at most two entries, so in a block with nothing else in it the first step always fits.
+func UpdateSince(ctx context.Context, q *dbq.Queries, owner string, given bool, seq int64, room int) (Update, error) {
 	if !given {
 		seq = 0
 	}
@@ -130,19 +139,24 @@ func UpdateSince(ctx context.Context, q *dbq.Queries, owner string, given bool, 
 	if cur == seq {
 		return Update{Seq: cur}, nil
 	}
-	out := Update{Changed: true, Seq: cur}
-	after, err := At(ctx, q, owner, cur)
-	if err != nil {
-		return Update{}, err
+	var before []Line
+	if seq > 0 {
+		if before, err = At(ctx, q, owner, seq); err != nil {
+			return Update{}, err
+		}
 	}
-	if seq <= 0 {
-		out.Text = Section(after)
-		return out, nil
+	for at := min(cur, seq+maxSteps); at > seq; at-- {
+		after, err := At(ctx, q, owner, at)
+		if err != nil {
+			return Update{}, err
+		}
+		text := Changes(before, after)
+		if seq <= 0 {
+			text = Section(after)
+		}
+		if len(text) <= room {
+			return Update{Changed: true, Seq: at, Text: text, More: at < cur}, nil
+		}
 	}
-	before, err := At(ctx, q, owner, seq)
-	if err != nil {
-		return Update{}, err
-	}
-	out.Text = Changes(before, after)
-	return out, nil
+	return Update{Seq: seq, More: true}, nil
 }

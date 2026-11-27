@@ -64,10 +64,10 @@ func (t *turn) projectUpdate(ctx context.Context, q *dbq.Queries) (string, *proj
 // newest delivery that gave it owner memory, unless kagent never saw that message, else since its
 // attempt's brief; a session given none gets the whole section. The main session's first message
 // carries the whole section in its context block instead (see frozenText).
-func (t *turn) ownerUpdate(ctx context.Context, q *dbq.Queries) (ownermemory.Update, error) {
+func (t *turn) ownerUpdate(ctx context.Context, q *dbq.Queries, room int) (ownermemory.Update, error) {
 	row, err := q.OwnerMemoryGiven(ctx, dbq.OwnerMemoryGivenParams{SessionID: t.d.SessionID, DeliveryID: t.c.ID})
 	if err != nil {
 		return ownermemory.Update{}, fmt.Errorf("owner memory given: %w", err)
 	}
-	return ownermemory.UpdateSince(ctx, q, t.d.UserID, row.Given, row.Seq)
+	return ownermemory.UpdateSince(ctx, q, t.d.UserID, row.Given, row.Seq, room)
 }

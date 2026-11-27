@@ -327,13 +327,18 @@ func closeProposal(ctx context.Context, q *dbq.Queries, row dbq.ProjectMemoryEnt
 
 // AddMovedEntry adds text to the project's memory as an active entry moved there from owner memory
 // entry ownerEntryID, keeping the owner entry's author and source. The caller holds the owner's
-// memory lock and the project row lock (LockOwnedProject), in that order. An active entry with the
-// same text answers instead; ErrMemoryFull when it does not fit.
+// memory lock and the project row lock (LockOwnedProject), in that order. An open entry with the
+// same text answers instead, so the project never holds the text twice: an active one as it is, a
+// proposal accepted as the moved entry (keeping its own source, and replacing what it names).
+// ErrMemoryFull when it does not fit.
 func AddMovedEntry(ctx context.Context, q *dbq.Queries, projectID, text string, author Author, src Source, ownerEntryID string) (Entry, error) {
 	existing, err := q.FindOpenProjectMemoryByText(ctx, dbq.FindOpenProjectMemoryByTextParams{ProjectID: projectID, Text: text})
-	if err == nil && existing.State == StateActive {
+	switch {
+	case err == nil && existing.State == StateActive:
 		return entryOf(existing), nil
-	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	case err == nil && existing.State == StateProposed:
+		return accept(ctx, q, existing)
+	case err != nil && !errors.Is(err, pgx.ErrNoRows):
 		return Entry{}, err
 	}
 	seq, err := makeRoom(ctx, q, projectID, len(text), nil)

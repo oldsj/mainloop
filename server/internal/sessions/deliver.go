@@ -818,17 +818,19 @@ func (t *turn) decideSend(ctx context.Context, ksid string) (string, error) {
 					return err
 				}
 				project = p
-				owner, err := t.ownerUpdate(ctx, q)
+				// Owner memory gets what room the project's part leaves, and records only the
+				// sequence it gave whole.
+				owner, err := t.ownerUpdate(ctx, q, projectcontext.Room(body))
 				if err != nil {
 					return err
 				}
 				if owner.Changed {
 					ownerSeq, body = &owner.Seq, body+owner.Text
 				}
-				if project != nil || ownerSeq != nil {
+				if project != nil || ownerSeq != nil || owner.More {
 					// Frozen even when nothing readable changed, so the record and the text go together.
 					withUpdate := t.d.Content
-					if block := projectcontext.Block(body); block != "" {
+					if block := projectcontext.Block(body, owner.More); block != "" {
 						withUpdate = block + newMessageMarker + "\n" + t.d.Content
 					}
 					frozen = &withUpdate
