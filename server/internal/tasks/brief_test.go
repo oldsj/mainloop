@@ -10,9 +10,12 @@ import (
 	"github.com/oldsj/mainloop/server/internal/tasks"
 )
 
-// maxGuidanceBytes bounds what the brief adds around the delegator's text, so the guidance cannot
-// grow into the 16 KiB the assigned work may use.
-const maxGuidanceBytes = 3072
+// maxCodeGuidanceBytes and maxCoordinationGuidanceBytes bound what the brief adds around the
+// delegator's text, so the guidance cannot grow into the 16 KiB the assigned work may use.
+const (
+	maxCodeGuidanceBytes         = 2880
+	maxCoordinationGuidanceBytes = 1664
+)
 
 // TestGuidanceDoesNotKeyTheCheckoutOnTheRole holds the wording to what is true of every brief: the
 // checkout belongs to code tasks, whatever their role, and the guidance names no role as lacking it.
@@ -39,14 +42,15 @@ func TestBriefsStateTheRoleAndShareTheGuidance(t *testing.T) {
 		{
 			name: "supervisor/coordination", role: dbstate.AttemptSupervisor, mode: dbstate.TaskModeCoordination,
 			want: []string{"You are the Mainloop task supervisor.", "no repository authority"},
-			not:  []string{"## Workspace environment", "open_pull_request", "dev_sync"},
+			not:  []string{"## Workspace environment", "open_pull_request", "dev_sync", "watch_checks", "get_verification", "/opt/cache"},
 		},
 		{
 			// A root code task is a supervisor by position and has the checkout.
 			name: "supervisor/code", role: dbstate.AttemptSupervisor, mode: dbstate.TaskModeCode,
 			want: []string{
 				"You are the Mainloop task supervisor.", "open_pull_request", "## Workspace environment",
-				"gVisor sandbox", "SSL_CERT_FILE", "dev_sync", "empty commit",
+				"sandbox", "SSL_CERT_FILE", "dev_sync", "staging target", "empty commit", "`get_verification`", "push once",
+				"`watch_checks`", "end your turn", "three failed rounds", "starter workflow", "`/opt/cache`", "`GOCACHE`", "do not move them",
 			},
 			not: []string{"no repository authority"},
 		},
@@ -54,13 +58,14 @@ func TestBriefsStateTheRoleAndShareTheGuidance(t *testing.T) {
 			name: "child/code", role: dbstate.AttemptChild, mode: dbstate.TaskModeCode,
 			want: []string{
 				"You are the Mainloop task child.", "open_pull_request", "## Workspace environment",
-				"gVisor sandbox", "SSL_CERT_FILE", "dev_sync", "empty commit",
+				"sandbox", "SSL_CERT_FILE", "dev_sync", "staging target", "empty commit", "`get_verification`", "push once",
+				"`watch_checks`", "end your turn", "three failed rounds", "starter workflow", "`/opt/cache`", "`GOCACHE`", "do not move them",
 			},
 		},
 		{
 			name: "child/coordination", role: dbstate.AttemptChild, mode: dbstate.TaskModeCoordination,
 			want: []string{"You are the Mainloop task child.", "no repository authority"},
-			not:  []string{"## Workspace environment", "open_pull_request", "dev_sync"},
+			not:  []string{"## Workspace environment", "open_pull_request", "dev_sync", "watch_checks", "get_verification", "/opt/cache"},
 		},
 	}
 	for _, c := range cases {
@@ -82,8 +87,12 @@ func TestBriefsStateTheRoleAndShareTheGuidance(t *testing.T) {
 					t.Errorf("brief has %q:\n%s", w, got)
 				}
 			}
-			if n := len(got) - len(work); n > maxGuidanceBytes {
-				t.Errorf("guidance is %d bytes, want at most %d", n, maxGuidanceBytes)
+			limit := maxCoordinationGuidanceBytes
+			if c.mode == dbstate.TaskModeCode {
+				limit = maxCodeGuidanceBytes
+			}
+			if n := len(got) - len(work); n > limit {
+				t.Errorf("guidance is %d bytes, want at most %d", n, limit)
 			}
 		})
 	}

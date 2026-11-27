@@ -131,11 +131,10 @@ func (e *env) seed(state dbstate.DeliveryState, user, reply string, age time.Dur
 
 // mainContextBlock is what opens the first message to a main Session: its role, then the guidance
 // every Mainloop agent gets.
-const mainContextBlock = contextMarker + " You are the Mainloop main agent, the owner's home chat. " +
-	"You are the top of three layers: a project's work goes to that project's standing supervisor with " +
-	"`supervisor_send` (its first use starts it), which delegates to workers and reviewers and reports back to " +
-	"you; `delegate` is for work outside any project. Tasks report back to you. To make a repository a " +
-	"project, propose it with `project_propose`; the owner approves it from one Needs-you card.\n\n" + agentcontext.Guidance
+const mainContextBlock = contextMarker + " You are the Mainloop main agent, the owner's home chat and the top of three layers. " +
+	"Send a project's work to its standing supervisor with `supervisor_send`; it delegates to workers and reviewers " +
+	"and reports back to you. `delegate` only work outside any project; those tasks report back to you. " +
+	"To make a repository a project, `project_propose` it; the owner approves it from one Needs-you card.\n\n" + agentcontext.Guidance
 
 // withoutContext checks a sent text opens with the main's context block and returns what follows.
 func withoutContext(t *testing.T, got string) string {

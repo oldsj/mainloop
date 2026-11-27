@@ -19,13 +19,12 @@ func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief, proj
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are the Mainloop task %s. First call `whoami`, then `task_get` with its task_id.", role)
 	if mode == dbstate.TaskModeCode {
-		b.WriteString(" Do the work and `git push` the task branch." +
-			" With `dev_sync`, try the pushed head on mainloop-dev first:" +
-			" `dev_lease_acquire` until `acquired` (within 2 minutes while `queued`), then `dev_sync` that SHA, repeating while `pending`/`unknown`." +
-			" Proceed only on `succeeded` with `result.health_ok` true; else fix, push, sync again." +
-			" Then `dev_lease_release`; put the sync id in `evidence_refs`; re-sync after any push." +
-			" Then `open_pull_request`." +
+		b.WriteString(" Do the work, run what `get_verification` says (CI runs the rest), then `git push` the task branch: push once, not after every commit." +
+			" With `dev_sync`, try the pushed head on the project's staging target first: hold the lease (`dev_lease_acquire`), `dev_sync` that SHA until it settles," +
+			" and go on only on `succeeded` with `result.health_ok` true, else fix, push and sync again; then `dev_lease_release`, put the sync id in `evidence_refs`, and re-sync after any push." +
+			" Then `open_pull_request`, call `watch_checks` with `reviews` and end your turn. After three failed rounds on one check or review, report `outcome=blocked`." +
 			" If CI fails a test your change does not touch but it passes locally, push one empty commit to rerun CI and say so in your report." +
+			" With no CI, run every check and propose a starter workflow." +
 			" Once CI is green, `merge_pull_request` (subject to policy); on `approval_required`, use `merge_pull_request_with_approval` or report missing approval tooling as a blocker.")
 	} else {
 		b.WriteString(" Do the assigned coordination work; you have no repository authority.")
@@ -41,8 +40,9 @@ func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief, proj
 	b.WriteString(agentcontext.Guidance)
 	if mode == dbstate.TaskModeCode {
 		b.WriteString("\n## Workspace environment\n" +
-			"- The workspace is a gVisor sandbox: prefer fewer, larger commands.\n" +
-			"- Keep `SSL_CERT_FILE`, `SSL_CERT_DIR` and `NODE_EXTRA_CA_CERTS` as set. Only allowlisted hosts are reachable; the GitHub API is not.\n" +
+			"- The workspace is a sandbox: prefer fewer, larger commands.\n" +
+			"- Keep `SSL_CERT_FILE`, `SSL_CERT_DIR` and `NODE_EXTRA_CA_CERTS` as set; only allowlisted hosts are reachable.\n" +
+			"- With a cache image, caches live under `/opt/cache` (`GOCACHE`, `GOMODCACHE`, `pnpm_config_store_dir`); use them as set and do not move them.\n" +
 			"- You may run as root but cannot install OS packages.\n")
 	}
 	return b.String()
@@ -53,10 +53,9 @@ func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief, proj
 const StandingGuidance = "## Standing supervisor\n" +
 	"You are this project's standing supervisor, the middle of three layers: main sends you work and you report to main; " +
 	"the workers and reviewers you `delegate` report to you and cannot delegate.\n" +
-	"- You never complete. When a batch of work is done, `report` outcome `completed` with a summary and end your turn: " +
-	"you are then at rest, and the next message wakes you. Report `blocked`, never `failed`.\n" +
-	"- Hand code to workers (`delegate` mode `code`); you have no checkout. Steer, follow up and read them with the task tools, " +
-	"and arm a loop or end your turn rather than poll.\n"
+	"- You never complete. When a batch of work is done, `report` outcome `completed` with a summary and end your turn; " +
+	"the next message wakes you. Report `blocked`, never `failed`.\n" +
+	"- Hand code to workers (`delegate` mode `code`) and manage them with the task tools; arm a loop or end your turn rather than poll.\n"
 
 // attemptBrief renders the brief an attempt's agent receives. A task with a project carries the
 // project's instructions and active memory as of the version and memory sequence pinned on the
