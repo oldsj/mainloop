@@ -107,6 +107,7 @@ type rpc struct {
 	Result struct {
 		Tools []struct {
 			Name        string         `json:"name"`
+			Description string         `json:"description"`
 			InputSchema map[string]any `json:"inputSchema"`
 		} `json:"tools"`
 		IsError           bool             `json:"isError"`
@@ -261,15 +262,15 @@ func TestDiscoveryFollowsThePerActorTable(t *testing.T) {
 	// it) is listed of the pull request tools. The coordination grant adds the issue writes.
 	want := []string{
 		"cancel_privileged_action", "check_status", "comment_issue", "comment_pull_request", "create_issue", "decide", "delegate", "follow_up", "forget", "get_issue", "get_privileged_action", "get_pull_request", "get_verification", "list_dependabot_alerts", "list_models", "loop_arm", "loop_list", "loop_stop", "note", "open_pull_request",
-		"pending_add", "pending_done", "project_context", "project_propose", "project_settings", "remember", "request_privileged_action", "steer", "supervisor_send", "task_cancel", "task_get", "task_history", "task_hold", "task_list", "task_reassign", "task_retry", "task_transcript", "topic_open", "topics", "transcript_search", "watch_checks", "whoami",
+		"owner_memory", "pending_add", "pending_done", "project_context", "project_propose", "project_settings", "remember", "request_privileged_action", "steer", "supervisor_send", "task_cancel", "task_get", "task_history", "task_hold", "task_list", "task_reassign", "task_retry", "task_transcript", "topic_open", "topics", "transcript_search", "watch_checks", "whoami",
 	}
 	if got := h.list(t, mcpserver.PathOrdinary, main.Token); !slices.Equal(got, want) {
 		t.Errorf("main lists %v, want %v", got, want)
 	}
-	if got := h.list(t, mcpserver.PathOrdinary, ws.Token); !slices.Equal(got, []string{"check_status", "comment_pull_request", "forget", "get_issue", "get_pull_request", "get_verification", "list_dependabot_alerts", "open_pull_request", "project_context", "remember", "watch_checks", "whoami"}) {
+	if got := h.list(t, mcpserver.PathOrdinary, ws.Token); !slices.Equal(got, []string{"check_status", "comment_pull_request", "forget", "get_issue", "get_pull_request", "get_verification", "list_dependabot_alerts", "open_pull_request", "owner_memory", "project_context", "remember", "watch_checks", "whoami"}) {
 		t.Errorf("workspace agent lists %v", got)
 	}
-	if got := h.list(t, mcpserver.PathOrdinary, sup.Token); !slices.Equal(got, []string{"cancel_privileged_action", "comment_issue", "comment_pull_request", "create_issue", "delegate", "follow_up", "forget", "get_issue", "get_privileged_action", "get_pull_request", "list_models", "loop_arm", "loop_list", "loop_stop", "project_context", "project_propose", "remember", "report", "request_privileged_action", "steer", "task_cancel", "task_get", "task_history", "task_list", "task_reassign", "task_retry", "task_transcript", "transcript_search", "whoami"}) {
+	if got := h.list(t, mcpserver.PathOrdinary, sup.Token); !slices.Equal(got, []string{"cancel_privileged_action", "comment_issue", "comment_pull_request", "create_issue", "delegate", "follow_up", "forget", "get_issue", "get_privileged_action", "get_pull_request", "list_models", "loop_arm", "loop_list", "loop_stop", "owner_memory", "project_context", "project_propose", "remember", "report", "request_privileged_action", "steer", "task_cancel", "task_get", "task_history", "task_list", "task_reassign", "task_retry", "task_transcript", "transcript_search", "whoami"}) {
 		t.Errorf("supervisor lists %v", got)
 	}
 

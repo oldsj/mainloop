@@ -74,6 +74,11 @@ func (Unimplemented) CreateWorkspace(context.Context, CreateWorkspaceRequestObje
 	return nil, apierr.NotImplemented
 }
 
+// DecideOwnerMemoryEntry is not implemented yet.
+func (Unimplemented) DecideOwnerMemoryEntry(context.Context, DecideOwnerMemoryEntryRequestObject) (DecideOwnerMemoryEntryResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // DecideProjectMemoryEntry is not implemented yet.
 func (Unimplemented) DecideProjectMemoryEntry(context.Context, DecideProjectMemoryEntryRequestObject) (DecideProjectMemoryEntryResponseObject, error) {
 	return nil, apierr.NotImplemented
@@ -206,6 +211,11 @@ func (Unimplemented) GetMainThread(context.Context, GetMainThreadRequestObject) 
 
 // GetMergePolicy is not implemented yet.
 func (Unimplemented) GetMergePolicy(context.Context, GetMergePolicyRequestObject) (GetMergePolicyResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// GetOwnerMemory is not implemented yet.
+func (Unimplemented) GetOwnerMemory(context.Context, GetOwnerMemoryRequestObject) (GetOwnerMemoryResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 
@@ -591,6 +601,11 @@ func (Unimplemented) SetDevicePush(context.Context, SetDevicePushRequestObject) 
 
 // SetDotfilesSource is not implemented yet.
 func (Unimplemented) SetDotfilesSource(context.Context, SetDotfilesSourceRequestObject) (SetDotfilesSourceResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
+// SetOwnerMemorySettings is not implemented yet.
+func (Unimplemented) SetOwnerMemorySettings(context.Context, SetOwnerMemorySettingsRequestObject) (SetOwnerMemorySettingsResponseObject, error) {
 	return nil, apierr.NotImplemented
 }
 

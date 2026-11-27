@@ -9,6 +9,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/ownermemory"
 	"github.com/oldsj/mainloop/server/internal/projectcontext"
 )
 
@@ -56,4 +57,17 @@ func (t *turn) projectUpdate(ctx context.Context, q *dbq.Queries) (string, *proj
 		instructionsVersion: int32(up.InstructionsVersion), //nolint:gosec // versions stay far below 2^31
 		memorySeq:           up.MemorySeq,
 	}, nil
+}
+
+// ownerUpdate is the owner memory part of a session's next message
+// (docs/specs/owner-memory.md#where-it-loads), for every kind of session: what changed since the
+// newest delivery that gave it owner memory, unless kagent never saw that message, else since its
+// attempt's brief; a session given none gets the whole section. The main session's first message
+// carries the whole section in its context block instead (see frozenText).
+func (t *turn) ownerUpdate(ctx context.Context, q *dbq.Queries) (ownermemory.Update, error) {
+	row, err := q.OwnerMemoryGiven(ctx, dbq.OwnerMemoryGivenParams{SessionID: t.d.SessionID, DeliveryID: t.c.ID})
+	if err != nil {
+		return ownermemory.Update{}, fmt.Errorf("owner memory given: %w", err)
+	}
+	return ownermemory.UpdateSince(ctx, q, t.d.UserID, row.Given, row.Seq)
 }

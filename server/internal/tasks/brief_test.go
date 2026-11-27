@@ -70,7 +70,7 @@ func TestBriefsStateTheRoleAndShareTheGuidance(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := tasks.DelegatedBrief(c.role, c.mode, work, "")
+			got := tasks.DelegatedBrief(c.role, c.mode, work, "", "")
 			if !strings.Contains(got, "## Assigned work\n"+work+"\n\n") {
 				t.Fatalf("the assigned work is not intact in %q", got)
 			}
@@ -104,7 +104,7 @@ func TestBriefCarriesProjectInstructionsBeforeTheGuidance(t *testing.T) {
 	const work = "Ship the thing"
 	section := projectcontext.Section(projectcontext.Instructions{ProjectID: "p1", Version: 3, Text: "UI demos use fictional data."})
 	for _, mode := range []dbstate.TaskMode{dbstate.TaskModeCode, dbstate.TaskModeCoordination} {
-		got := tasks.DelegatedBrief(dbstate.AttemptChild, mode, work, section)
+		got := tasks.DelegatedBrief(dbstate.AttemptChild, mode, work, "", section)
 		w, p, g := strings.Index(got, "## Assigned work"), strings.Index(got, "## Project instructions (owner, v3)"), strings.Index(got, agentcontext.Guidance)
 		if w < 0 || p < 0 || g < 0 || w >= p || p >= g {
 			t.Fatalf("%s: want assigned work, then project instructions, then guidance:\n%s", mode, got)
@@ -116,7 +116,7 @@ func TestBriefCarriesProjectInstructionsBeforeTheGuidance(t *testing.T) {
 	if s := projectcontext.Section(projectcontext.Instructions{ProjectID: "p1"}); s != "" {
 		t.Errorf("no instructions rendered %q", s)
 	}
-	if got := tasks.DelegatedBrief(dbstate.AttemptChild, dbstate.TaskModeCode, work, ""); strings.Contains(got, "Project instructions") {
+	if got := tasks.DelegatedBrief(dbstate.AttemptChild, dbstate.TaskModeCode, work, "", ""); strings.Contains(got, "Project instructions") {
 		t.Errorf("a project without instructions got a section:\n%s", got)
 	}
 }

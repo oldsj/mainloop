@@ -388,6 +388,7 @@ SET state = 'sending', detail = NULL, kagent_session_id = sqlc.arg(kagent_sessio
     sent_text = coalesce(sqlc.narg(sent_text)::text, d.sent_text),
     given_instructions_version = coalesce(sqlc.narg(given_instructions_version)::integer, d.given_instructions_version),
     given_memory_seq = coalesce(sqlc.narg(given_memory_seq)::bigint, d.given_memory_seq),
+    given_owner_memory_seq = coalesce(sqlc.narg(given_owner_memory_seq)::bigint, d.given_owner_memory_seq),
     updated_at = now()
 WHERE d.id = sqlc.arg(id) AND d.lease_owner = sqlc.arg(lease_owner) AND d.attempts = sqlc.arg(attempts)
   AND d.state = 'recorded'

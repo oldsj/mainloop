@@ -24,6 +24,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/hitl"
 	"github.com/oldsj/mainloop/server/internal/kagent"
 	"github.com/oldsj/mainloop/server/internal/progress"
+	"github.com/oldsj/mainloop/server/internal/projectcontext"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 	kagentapi "github.com/oldsj/mainloop/server/third_party/kagentproto/kagent/api/v1"
 )
@@ -802,29 +803,43 @@ func (t *turn) decideSend(ctx context.Context, ksid string) (string, error) {
 		if err != nil {
 			return err
 		}
-		// A task session's first send of this message also carries any change to its project's
-		// context; a resend keeps the text and the record the first send froze.
+		// A session's first send of this message also carries any change to its context: a task's
+		// project instructions and memory, and every session's owner memory. A main whose context
+		// block was just rendered has its owner memory in it. A resend keeps the text and the record
+		// the first send froze.
 		var project *projectGiven
+		var ownerSeq *int64
 		if t.d.SentText == nil {
-			block, p, err := t.projectUpdate(ctx, q)
-			if err != nil {
-				return err
-			}
-			project = p
-			if p != nil {
-				// Frozen even when nothing readable changed, so the record and the text go together.
-				withUpdate := t.d.Content
-				if block != "" {
-					withUpdate = block + newMessageMarker + "\n" + t.d.Content
+			if given != nil {
+				ownerSeq = given.ownerMemorySeq
+			} else {
+				body, p, err := t.projectUpdate(ctx, q)
+				if err != nil {
+					return err
 				}
-				frozen = &withUpdate
+				project = p
+				owner, err := t.ownerUpdate(ctx, q)
+				if err != nil {
+					return err
+				}
+				if owner.Changed {
+					ownerSeq, body = &owner.Seq, body+owner.Text
+				}
+				if project != nil || ownerSeq != nil {
+					// Frozen even when nothing readable changed, so the record and the text go together.
+					withUpdate := t.d.Content
+					if block := projectcontext.Block(body); block != "" {
+						withUpdate = block + newMessageMarker + "\n" + t.d.Content
+					}
+					frozen = &withUpdate
+				}
 			}
 		}
 		if frozen != nil {
 			text = *frozen
 		}
 		send := dbq.MarkDeliverySendingParams{
-			KagentSessionID: &ksid, SentText: frozen,
+			KagentSessionID: &ksid, SentText: frozen, GivenOwnerMemorySeq: ownerSeq,
 		}
 		if project != nil {
 			send.GivenInstructionsVersion, send.GivenMemorySeq = &project.instructionsVersion, &project.memorySeq

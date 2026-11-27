@@ -19,6 +19,10 @@
 //   - project_memory: one 'review' item per project with memory proposals waiting for the owner,
 //     opened, updated with the count and resolved by [Service.SyncTasks] from
 //     project_memory_entries. It is a low-priority decision: counted, listed last, never pushed.
+//   - owner_memory: one 'review' item per owner while owner memory proposals wait, or entries are
+//     due for review, lapsed or already in the dotfiles (docs/specs/owner-memory.md), opened,
+//     rewritten and resolved by [Service.SyncTasks] like project_memory. The same sweep first
+//     lapses the entries whose review window and grace have run out.
 //   - queue: written by [Open], for questions other slices put to the owner. The owner's answer is
 //     stored on the row (detail.response) for that slice to read; nothing is delivered from here.
 //
@@ -51,6 +55,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/events"
+	"github.com/oldsj/mainloop/server/internal/ownermemory"
 	"github.com/oldsj/mainloop/server/internal/reconcile"
 )
 
@@ -63,6 +68,7 @@ const (
 	SourceStalledTurn    = "turn_stalled"
 	SourceQueue          = "queue"
 	SourceProjectMemory  = "project_memory"
+	SourceOwnerMemory    = "owner_memory"
 )
 
 // noticePrefix marks the queue_item_id of an input notice (a hitl_diagnostics row).
@@ -109,6 +115,8 @@ type Service struct {
 	SweepEvery time.Duration
 	// Approvals checks an Approve of a privileged action's card. Nil refuses a device's.
 	Approvals PrivilegedApprovals
+	// Now is the clock owner memory is aged by; nil means time.Now.
+	Now func() time.Time
 
 	hooks map[string]AnswerHook // queue item id prefix → hook
 }
@@ -149,8 +157,23 @@ func (s *Service) Sweep() reconcile.Sweep {
 // replica or a duplicate pass publishes neither too little nor too much. Two sweeps that race in
 // the same instant can each publish once.
 func (s *Service) SyncTasks(ctx context.Context) error {
+	now := time.Now()
+	if s.Now != nil {
+		now = s.Now()
+	}
 	return events.InTxPublish(ctx, s.Pool, func(tx pgx.Tx) ([]events.Draft, error) {
 		q := dbq.New(tx)
+		// Lapsing changes what is due, so it goes before the owner memory item is written. A lapse
+		// is not an item change of its own.
+		if _, err := ownermemory.Lapse(ctx, q, s.OwnerID, now); err != nil {
+			return nil, err
+		}
+		openOwnerMemory := func(ctx context.Context, owner string) ([]string, error) {
+			return q.OpenOwnerMemoryAttention(ctx, dbq.OpenOwnerMemoryAttentionParams{UserID: owner, Now: now})
+		}
+		resolveOwnerMemory := func(ctx context.Context, owner string) ([]string, error) {
+			return q.ResolveOwnerMemoryAttention(ctx, dbq.ResolveOwnerMemoryAttentionParams{UserID: owner, Now: now})
+		}
 		var changed []string
 		for _, step := range []func(context.Context, string) ([]string, error){
 			q.OpenTaskDecisionAttention, q.ResolveStaleTaskDecisions, q.ResolveQueueForFinishedTasks,
@@ -158,6 +181,7 @@ func (s *Service) SyncTasks(ctx context.Context) error {
 			q.OpenMergeProposalAttention, q.ResolveMergeProposalAttention,
 			q.OpenStalledTurnAttention, q.ResolveStalledTurnAttention,
 			q.OpenProjectMemoryAttention, q.ResolveProjectMemoryAttention,
+			openOwnerMemory, resolveOwnerMemory,
 			q.OpenLoopNoProgressAttention, q.ResolveLoopNoProgressAttention,
 			q.ResolveFinishedSessionAttention, q.ResolveAttentionHiddenForGood,
 		} {
@@ -374,6 +398,8 @@ func (s *Service) item(r dbq.AttentionItem) (api.AttentionItem, bool) {
 		out.Id = "stalled:" + r.SourceID
 	case SourceProjectMemory:
 		out.Id = "memory:" + r.SourceID
+	case SourceOwnerMemory:
+		out.Id = "owner-memory:" + r.SourceID
 	case SourceMerge:
 		var detail struct {
 			RequestID string `json:"hitl_request_id"`

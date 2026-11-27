@@ -21,6 +21,24 @@ type Tool struct {
 	// additional properties.
 	InputSchema map[string]any
 	Handle      func(ctx context.Context, actor agentauth.Actor, args json.RawMessage) (Result, error)
+	// Limited, when set, is how the tool is described to the actors it names: a narrower
+	// description for those who may use only part of it. The handler still checks; the contract
+	// publishes the full description.
+	Limited *Listing
+}
+
+// Listing is a tool's description as some actors see it.
+type Listing struct {
+	For         func(agentauth.Actor) bool
+	Description string
+}
+
+// description is the description the tool is listed with to actor a.
+func (t Tool) description(a agentauth.Actor) string {
+	if t.Limited != nil && t.Limited.For(a) {
+		return t.Limited.Description
+	}
+	return t.Description
 }
 
 // Result is what a tool returns: text for the model and the same facts as structured content,

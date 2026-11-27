@@ -7,6 +7,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/agentcontext"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
+	"github.com/oldsj/mainloop/server/internal/ownermemory"
 	"github.com/oldsj/mainloop/server/internal/projectcontext"
 	"github.com/oldsj/mainloop/server/internal/tasks"
 )
@@ -113,6 +114,55 @@ func TestBriefCarriesTheProjectMemoryPinnedOnTheAttempt(t *testing.T) {
 	r.eventually("second supervisor provisioned", func() bool { return r.opState(second) == "completed" })
 	_, secondSession := r.attemptOf(second)
 	if msg := r.str(`SELECT content FROM session_messages WHERE session_id = $1`, secondSession); strings.Contains(msg, "## Project memory") {
+		t.Fatalf("a forgotten entry reached a later brief: %q", msg)
+	}
+}
+
+// TestBriefCarriesTheOwnerMemoryPinnedOnTheAttempt: a brief carries the owner's active memory
+// after the assigned work and before the project's instructions, as it stood when the attempt
+// first got its brief; a resend renders the same bytes after the entry is forgotten.
+func TestBriefCarriesTheOwnerMemoryPinnedOnTheAttempt(t *testing.T) {
+	r := newRig(t)
+	r.run()
+	ctx := context.Background()
+	pc := &projectcontext.Service{Pool: r.pool, OwnerID: owner}
+	om := &ownermemory.Service{Pool: r.pool, OwnerID: owner}
+	main := ownermemory.Recorder{Author: ownermemory.AuthorMain}
+
+	if _, err := pc.SetInstructions(ctx, "p1", "UI demos use fictional data.", 0); err != nil {
+		t.Fatal(err)
+	}
+	kept, err := om.Remember(ctx, main, "I review UI on my phone.", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := r.mustCreate(r.own, tasks.CreateInput{ProjectID: "p1", Brief: "Ship the thing"})
+	r.eventually("supervisor provisioned", func() bool { return r.opState(first) == "completed" })
+	attempt, session := r.attemptOf(first)
+	msg := r.str(`SELECT content FROM session_messages WHERE session_id = $1`, session)
+	work, own, instr := strings.Index(msg, "Ship the thing"), strings.Index(msg, "## Owner memory\n"), strings.Index(msg, "## Project instructions")
+	if work < 0 || own < work || instr < own ||
+		!strings.Contains(msg, "- I review UI on my phone. (owner memory "+kept.ID+", confirmed ") {
+		t.Fatalf("brief = %q", msg)
+	}
+	pinned := func(l []ownermemory.Line, err error) []ownermemory.Line {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	before := ownermemory.Section(pinned(ownermemory.ForAttempt(ctx, dbq.New(r.pool), attempt, owner)))
+	if _, err := om.Forget(ctx, main, kept.ID); err != nil {
+		t.Fatal(err)
+	}
+	if again := ownermemory.Section(pinned(ownermemory.ForAttempt(ctx, dbq.New(r.pool), attempt, owner))); again != before || !strings.Contains(msg, before) {
+		t.Fatalf("resend = %q, want %q", again, before)
+	}
+	second := r.mustCreate(r.own, tasks.CreateInput{ProjectID: "p1", Brief: "Ship another"})
+	r.eventually("second supervisor provisioned", func() bool { return r.opState(second) == "completed" })
+	_, secondSession := r.attemptOf(second)
+	if msg := r.str(`SELECT content FROM session_messages WHERE session_id = $1`, secondSession); strings.Contains(msg, "## Owner memory") {
 		t.Fatalf("a forgotten entry reached a later brief: %q", msg)
 	}
 }

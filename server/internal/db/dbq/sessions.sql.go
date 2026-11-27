@@ -611,7 +611,7 @@ func (q *Queries) GetConversationSummary(ctx context.Context, arg GetConversatio
 }
 
 const getDelivery = `-- name: GetDelivery :one
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text, activity_at, activity_kind, stalled_at, given_instructions_version, given_memory_seq FROM deliveries WHERE id = $1
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text, activity_at, activity_kind, stalled_at, given_instructions_version, given_memory_seq, given_owner_memory_seq FROM deliveries WHERE id = $1
 `
 
 func (q *Queries) GetDelivery(ctx context.Context, id string) (Delivery, error) {
@@ -642,6 +642,7 @@ func (q *Queries) GetDelivery(ctx context.Context, id string) (Delivery, error) 
 		&i.StalledAt,
 		&i.GivenInstructionsVersion,
 		&i.GivenMemorySeq,
+		&i.GivenOwnerMemorySeq,
 	)
 	return i, err
 }
@@ -1203,7 +1204,7 @@ const insertDelivery = `-- name: InsertDelivery :one
 INSERT INTO deliveries (id, idempotency_key, session_id, source)
 VALUES ($1, $1, $2, $3)
 ON CONFLICT (id) DO NOTHING
-RETURNING id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text, activity_at, activity_kind, stalled_at, given_instructions_version, given_memory_seq
+RETURNING id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text, activity_at, activity_kind, stalled_at, given_instructions_version, given_memory_seq, given_owner_memory_seq
 `
 
 type InsertDeliveryParams struct {
@@ -1240,6 +1241,7 @@ func (q *Queries) InsertDelivery(ctx context.Context, arg InsertDeliveryParams) 
 		&i.StalledAt,
 		&i.GivenInstructionsVersion,
 		&i.GivenMemorySeq,
+		&i.GivenOwnerMemorySeq,
 	)
 	return i, err
 }
@@ -1312,7 +1314,7 @@ const insertQueuedDelivery = `-- name: InsertQueuedDelivery :one
 INSERT INTO deliveries (id, idempotency_key, session_id, source, state)
 VALUES ($1, $1, $2, $3, 'queued')
 ON CONFLICT (id) DO NOTHING
-RETURNING id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text, activity_at, activity_kind, stalled_at, given_instructions_version, given_memory_seq
+RETURNING id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text, activity_at, activity_kind, stalled_at, given_instructions_version, given_memory_seq, given_owner_memory_seq
 `
 
 type InsertQueuedDeliveryParams struct {
@@ -1352,6 +1354,7 @@ func (q *Queries) InsertQueuedDelivery(ctx context.Context, arg InsertQueuedDeli
 		&i.StalledAt,
 		&i.GivenInstructionsVersion,
 		&i.GivenMemorySeq,
+		&i.GivenOwnerMemorySeq,
 	)
 	return i, err
 }
@@ -1412,7 +1415,7 @@ func (q *Queries) InsertSessionRestart(ctx context.Context, arg InsertSessionRes
 }
 
 const listCancelledSessionSends = `-- name: ListCancelledSessionSends :many
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text, activity_at, activity_kind, stalled_at, given_instructions_version, given_memory_seq FROM deliveries WHERE session_id = $1 AND state = 'cancelled' AND detail = 'cancelled by user'
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text, activity_at, activity_kind, stalled_at, given_instructions_version, given_memory_seq, given_owner_memory_seq FROM deliveries WHERE session_id = $1 AND state = 'cancelled' AND detail = 'cancelled by user'
   AND (kagent_session_id IS NOT NULL OR task_id IS NOT NULL)
 `
 
@@ -1451,6 +1454,7 @@ func (q *Queries) ListCancelledSessionSends(ctx context.Context, sessionID strin
 			&i.StalledAt,
 			&i.GivenInstructionsVersion,
 			&i.GivenMemorySeq,
+			&i.GivenOwnerMemorySeq,
 		); err != nil {
 			return nil, err
 		}
@@ -1502,7 +1506,7 @@ func (q *Queries) ListCompletedDeliveries(ctx context.Context, arg ListCompleted
 }
 
 const listDeliveriesOnKagentSession = `-- name: ListDeliveriesOnKagentSession :many
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text, activity_at, activity_kind, stalled_at, given_instructions_version, given_memory_seq FROM deliveries
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text, activity_at, activity_kind, stalled_at, given_instructions_version, given_memory_seq, given_owner_memory_seq FROM deliveries
 WHERE session_id = $1 AND state IN ('sending', 'delivered', 'uncertain')
   AND (kagent_session_id IS NULL OR kagent_session_id = $2::text)
 ORDER BY created_at, id
@@ -1549,6 +1553,7 @@ func (q *Queries) ListDeliveriesOnKagentSession(ctx context.Context, arg ListDel
 			&i.StalledAt,
 			&i.GivenInstructionsVersion,
 			&i.GivenMemorySeq,
+			&i.GivenOwnerMemorySeq,
 		); err != nil {
 			return nil, err
 		}
@@ -1715,7 +1720,7 @@ func (q *Queries) ListMessageImagesBySession(ctx context.Context, sessionID stri
 }
 
 const listOpenDeliveries = `-- name: ListOpenDeliveries :many
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text, activity_at, activity_kind, stalled_at, given_instructions_version, given_memory_seq FROM deliveries
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text, activity_at, activity_kind, stalled_at, given_instructions_version, given_memory_seq, given_owner_memory_seq FROM deliveries
 WHERE session_id = $1 AND state IN ('recorded', 'sending', 'delivered', 'uncertain')
 ORDER BY created_at, id
 `
@@ -1755,6 +1760,7 @@ func (q *Queries) ListOpenDeliveries(ctx context.Context, sessionID string) ([]D
 			&i.StalledAt,
 			&i.GivenInstructionsVersion,
 			&i.GivenMemorySeq,
+			&i.GivenOwnerMemorySeq,
 		); err != nil {
 			return nil, err
 		}
@@ -1838,7 +1844,7 @@ func (q *Queries) ListSessionDefaults(ctx context.Context, userID string) ([]Lis
 }
 
 const listSessionDeliveries = `-- name: ListSessionDeliveries :many
-SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text, activity_at, activity_kind, stalled_at, given_instructions_version, given_memory_seq FROM deliveries WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2
+SELECT id, idempotency_key, session_id, state, source, task_id, evidence_ref, detail, outcome_version, kagent_session_id, health_tracked, attempts, create_failures, next_attempt_at, lease_owner, lease_until, created_at, updated_at, sent_text, activity_at, activity_kind, stalled_at, given_instructions_version, given_memory_seq, given_owner_memory_seq FROM deliveries WHERE session_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2
 `
 
 type ListSessionDeliveriesParams struct {
@@ -1880,6 +1886,7 @@ func (q *Queries) ListSessionDeliveries(ctx context.Context, arg ListSessionDeli
 			&i.StalledAt,
 			&i.GivenInstructionsVersion,
 			&i.GivenMemorySeq,
+			&i.GivenOwnerMemorySeq,
 		); err != nil {
 			return nil, err
 		}
@@ -2432,8 +2439,9 @@ SET state = 'sending', detail = NULL, kagent_session_id = $1,
     sent_text = coalesce($2::text, d.sent_text),
     given_instructions_version = coalesce($3::integer, d.given_instructions_version),
     given_memory_seq = coalesce($4::bigint, d.given_memory_seq),
+    given_owner_memory_seq = coalesce($5::bigint, d.given_owner_memory_seq),
     updated_at = now()
-WHERE d.id = $5 AND d.lease_owner = $6 AND d.attempts = $7
+WHERE d.id = $6 AND d.lease_owner = $7 AND d.attempts = $8
   AND d.state = 'recorded'
   AND NOT EXISTS (
       SELECT 1 FROM task_attempts a WHERE a.session_id = d.session_id AND a.stop_state <> 'none'
@@ -2449,6 +2457,7 @@ type MarkDeliverySendingParams struct {
 	SentText                 *string
 	GivenInstructionsVersion *int32
 	GivenMemorySeq           *int64
+	GivenOwnerMemorySeq      *int64
 	ID                       string
 	LeaseOwner               *string
 	Attempts                 int32
@@ -2462,6 +2471,7 @@ func (q *Queries) MarkDeliverySending(ctx context.Context, arg MarkDeliverySendi
 		arg.SentText,
 		arg.GivenInstructionsVersion,
 		arg.GivenMemorySeq,
+		arg.GivenOwnerMemorySeq,
 		arg.ID,
 		arg.LeaseOwner,
 		arg.Attempts,

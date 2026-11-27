@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -71,9 +72,12 @@ type Server struct {
 	DevLease   *devloop.LeaseService
 	DevOps     *devloop.OperationsService
 	DevTargets *devloop.TargetService
-	// Pool backs project memory, whose writes take the project row lock in their own
-	// transaction. With none, remember and forget answer that they are unavailable.
+	// Pool backs project and owner memory, whose writes take the project row lock or the owner's
+	// memory lock in their own transaction. With none, remember, forget and owner_memory answer
+	// that they are unavailable.
 	Pool *pgxpool.Pool
+	// Now is the clock owner memory ages entries by; nil means time.Now.
+	Now func() time.Time
 	// Onboarding serves project_propose; its OwnerID is set per call from the actor. With none,
 	// the tool answers that proposals are unavailable.
 	Onboarding *onboarding.Service
@@ -233,7 +237,7 @@ func (s *Server) buildServer(st *requestState, tools map[string]Tool) *mcp.Serve
 	srv := mcp.NewServer(&mcp.Implementation{Name: name, Version: "1"}, nil)
 	for _, tn := range s.Policy.Tools(st.actor, st.surface) {
 		t := tools[tn]
-		srv.AddTool(&mcp.Tool{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema},
+		srv.AddTool(&mcp.Tool{Name: t.Name, Description: t.description(st.actor), InputSchema: t.InputSchema},
 			s.call(st.actor, t))
 	}
 	return srv

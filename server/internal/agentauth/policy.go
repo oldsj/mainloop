@@ -28,6 +28,7 @@ const (
 	ToolProjectContext            = "project_context"
 	ToolRemember                  = "remember"
 	ToolForget                    = "forget"
+	ToolOwnerMemory               = "owner_memory"
 	ToolProjectPropose            = "project_propose"
 	ToolRequestPrivilegedAction   = "request_privileged_action"
 	ToolGetPrivilegedAction       = "get_privileged_action"
@@ -68,7 +69,7 @@ var AllTools = []string{
 	ToolWhoami, ToolTopics, ToolTopicOpen, ToolNote, ToolDecide, ToolPendingAdd, ToolPendingDone,
 	ToolOpenPullRequest,
 	ToolGetIssue, ToolGetPullRequest, ToolCreateIssue, ToolCommentIssue, ToolCommentPullRequest, ToolListDependabotAlerts, ToolCheckStatus, ToolWatchChecks, ToolGetVerification,
-	ToolProjectContext, ToolRemember, ToolForget, ToolProjectPropose,
+	ToolProjectContext, ToolRemember, ToolForget, ToolOwnerMemory, ToolProjectPropose,
 	ToolRequestPrivilegedAction, ToolGetPrivilegedAction, ToolCancelPrivilegedAction,
 	ToolTaskGet, ToolTaskList, ToolTaskHistory, ToolTaskTranscript, ToolTranscriptSearch, ToolDelegate, ToolListModels, ToolTaskCancel, ToolTaskRetry, ToolTaskReassign,
 	ToolTaskHold, ToolSteer, ToolFollowUp, ToolSupervisorSend, ToolProjectSettings, ToolReport, ToolLoopArm, ToolLoopList, ToolLoopStop,
@@ -239,9 +240,10 @@ func (p Policy) actorTools(a Actor) []string {
 	}
 	// Every live role reads its project's owner context and records memory on it: main any of its
 	// owner's projects, a task or workspace agent its own project only (the handlers check which).
-	// Only main's entries are active at once; the others are proposals for the owner.
+	// Only main's entries are active at once; the others are proposals for the owner. Every live
+	// role reads owner memory too; only main and supervisors record it (remember's handler checks).
 	if len(tools) > 0 {
-		tools = append(tools, ToolProjectContext, ToolRemember, ToolForget)
+		tools = append(tools, ToolProjectContext, ToolRemember, ToolForget, ToolOwnerMemory)
 	}
 	if slices.Contains(tools, ToolOpenPullRequest) {
 		tools = append(tools, issueTools...)

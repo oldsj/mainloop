@@ -205,3 +205,20 @@ func Bundle(files []File) ([]byte, string, error) {
 	sum := sha256.Sum256(buf.Bytes())
 	return buf.Bytes(), "sha256:" + hex.EncodeToString(sum[:]), nil
 }
+
+// BundleFile returns the file at path in a bundle, or nil when the bundle has none.
+func BundleFile(bundle []byte, path string) ([]byte, error) {
+	tr := tar.NewReader(bytes.NewReader(bundle))
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if h.Name == path {
+			return io.ReadAll(tr)
+		}
+	}
+}

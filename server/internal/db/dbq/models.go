@@ -179,6 +179,7 @@ type Delivery struct {
 	StalledAt                *time.Time
 	GivenInstructionsVersion *int32
 	GivenMemorySeq           *int64
+	GivenOwnerMemorySeq      *int64
 }
 
 type DeliverySteer struct {
@@ -690,6 +691,41 @@ type OwnerDotfilesSource struct {
 	UpdatedAt  time.Time
 }
 
+type OwnerMemoryEntry struct {
+	ID               string
+	UserID           string
+	Text             string
+	State            string
+	Author           string
+	SourceSessionID  *string
+	SourceTaskID     *string
+	SourceAttemptID  *string
+	SourceDeliveryID *string
+	ReplacesID       *string
+	LastConfirmedAt  *time.Time
+	LapsedAt         *time.Time
+	InDotfilesCommit *string
+	MovedToProjectID *string
+	MovedToEntryID   *string
+	CreatedAt        time.Time
+	DecidedAt        *time.Time
+}
+
+type OwnerMemorySetting struct {
+	UserID          string
+	ReviewAfterDays int32
+	Seq             int64
+	UpdatedAt       time.Time
+}
+
+type OwnerMemorySpan struct {
+	EntryID     string
+	UserID      string
+	StartSeq    int64
+	EndSeq      *int64
+	ConfirmedAt time.Time
+}
+
 type OwnerSeen struct {
 	UserID        string
 	Since         time.Time
@@ -868,20 +904,21 @@ type ProjectInstructionVersion struct {
 }
 
 type ProjectMemoryEntry struct {
-	ID               string
-	ProjectID        string
-	Text             string
-	State            string
-	Author           string
-	SourceSessionID  *string
-	SourceTaskID     *string
-	SourceAttemptID  *string
-	SourceDeliveryID *string
-	ReplacesID       *string
-	ActivatedSeq     *int64
-	EndedSeq         *int64
-	CreatedAt        time.Time
-	DecidedAt        *time.Time
+	ID                 string
+	ProjectID          string
+	Text               string
+	State              string
+	Author             string
+	SourceSessionID    *string
+	SourceTaskID       *string
+	SourceAttemptID    *string
+	SourceDeliveryID   *string
+	ReplacesID         *string
+	ActivatedSeq       *int64
+	EndedSeq           *int64
+	CreatedAt          time.Time
+	DecidedAt          *time.Time
+	SourceOwnerEntryID *string
 }
 
 type ProjectMergePolicyAudit struct {
@@ -1226,6 +1263,7 @@ type TaskAttempt struct {
 	InstructionsVersion       *int32
 	MemorySeq                 *int64
 	ReopenedAt                *time.Time
+	OwnerMemorySeq            *int64
 }
 
 type TaskCapacityRefusal struct {

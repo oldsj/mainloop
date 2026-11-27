@@ -12,7 +12,7 @@ import (
 const activateProjectMemoryEntry = `-- name: ActivateProjectMemoryEntry :one
 UPDATE project_memory_entries SET state = 'active', activated_seq = $1::bigint, decided_at = now()
 WHERE id = $2 AND state = 'proposed'
-RETURNING id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id, source_delivery_id, replaces_id, activated_seq, ended_seq, created_at, decided_at
+RETURNING id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id, source_delivery_id, replaces_id, activated_seq, ended_seq, created_at, decided_at, source_owner_entry_id
 `
 
 type ActivateProjectMemoryEntryParams struct {
@@ -38,6 +38,7 @@ func (q *Queries) ActivateProjectMemoryEntry(ctx context.Context, arg ActivatePr
 		&i.EndedSeq,
 		&i.CreatedAt,
 		&i.DecidedAt,
+		&i.SourceOwnerEntryID,
 	)
 	return i, err
 }
@@ -57,7 +58,7 @@ func (q *Queries) ActiveProjectMemoryBytes(ctx context.Context, projectID string
 const closeProjectMemoryProposal = `-- name: CloseProjectMemoryProposal :one
 UPDATE project_memory_entries SET state = $1, decided_at = now()
 WHERE id = $2 AND state = 'proposed'
-RETURNING id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id, source_delivery_id, replaces_id, activated_seq, ended_seq, created_at, decided_at
+RETURNING id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id, source_delivery_id, replaces_id, activated_seq, ended_seq, created_at, decided_at, source_owner_entry_id
 `
 
 type CloseProjectMemoryProposalParams struct {
@@ -84,6 +85,7 @@ func (q *Queries) CloseProjectMemoryProposal(ctx context.Context, arg CloseProje
 		&i.EndedSeq,
 		&i.CreatedAt,
 		&i.DecidedAt,
+		&i.SourceOwnerEntryID,
 	)
 	return i, err
 }
@@ -102,7 +104,7 @@ func (q *Queries) CountProposedProjectMemory(ctx context.Context, projectID stri
 const endProjectMemoryEntry = `-- name: EndProjectMemoryEntry :one
 UPDATE project_memory_entries SET state = $1, ended_seq = $2::bigint, decided_at = now()
 WHERE id = $3 AND state = 'active'
-RETURNING id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id, source_delivery_id, replaces_id, activated_seq, ended_seq, created_at, decided_at
+RETURNING id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id, source_delivery_id, replaces_id, activated_seq, ended_seq, created_at, decided_at, source_owner_entry_id
 `
 
 type EndProjectMemoryEntryParams struct {
@@ -130,12 +132,13 @@ func (q *Queries) EndProjectMemoryEntry(ctx context.Context, arg EndProjectMemor
 		&i.EndedSeq,
 		&i.CreatedAt,
 		&i.DecidedAt,
+		&i.SourceOwnerEntryID,
 	)
 	return i, err
 }
 
 const findOpenProjectMemoryByText = `-- name: FindOpenProjectMemoryByText :one
-SELECT id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id, source_delivery_id, replaces_id, activated_seq, ended_seq, created_at, decided_at FROM project_memory_entries
+SELECT id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id, source_delivery_id, replaces_id, activated_seq, ended_seq, created_at, decided_at, source_owner_entry_id FROM project_memory_entries
 WHERE project_id = $1 AND text = $2 AND state IN ('active', 'proposed')
 ORDER BY created_at, id
 LIMIT 1
@@ -165,12 +168,13 @@ func (q *Queries) FindOpenProjectMemoryByText(ctx context.Context, arg FindOpenP
 		&i.EndedSeq,
 		&i.CreatedAt,
 		&i.DecidedAt,
+		&i.SourceOwnerEntryID,
 	)
 	return i, err
 }
 
 const getProjectMemoryEntry = `-- name: GetProjectMemoryEntry :one
-SELECT id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id, source_delivery_id, replaces_id, activated_seq, ended_seq, created_at, decided_at FROM project_memory_entries WHERE id = $1 AND project_id = $2
+SELECT id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id, source_delivery_id, replaces_id, activated_seq, ended_seq, created_at, decided_at, source_owner_entry_id FROM project_memory_entries WHERE id = $1 AND project_id = $2
 `
 
 type GetProjectMemoryEntryParams struct {
@@ -196,6 +200,7 @@ func (q *Queries) GetProjectMemoryEntry(ctx context.Context, arg GetProjectMemor
 		&i.EndedSeq,
 		&i.CreatedAt,
 		&i.DecidedAt,
+		&i.SourceOwnerEntryID,
 	)
 	return i, err
 }
@@ -203,27 +208,28 @@ func (q *Queries) GetProjectMemoryEntry(ctx context.Context, arg GetProjectMemor
 const insertProjectMemoryEntry = `-- name: InsertProjectMemoryEntry :one
 INSERT INTO project_memory_entries (
     id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id,
-    source_delivery_id, replaces_id, activated_seq, decided_at
+    source_delivery_id, source_owner_entry_id, replaces_id, activated_seq, decided_at
 ) VALUES (
     $1, $2, $3, $4, $5,
     $6, $7, $8,
-    $9, $10, $11,
+    $9, $10, $11, $12,
     CASE WHEN $4::text = 'active' THEN now() END
-) RETURNING id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id, source_delivery_id, replaces_id, activated_seq, ended_seq, created_at, decided_at
+) RETURNING id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id, source_delivery_id, replaces_id, activated_seq, ended_seq, created_at, decided_at, source_owner_entry_id
 `
 
 type InsertProjectMemoryEntryParams struct {
-	ID               string
-	ProjectID        string
-	Text             string
-	State            string
-	Author           string
-	SourceSessionID  *string
-	SourceTaskID     *string
-	SourceAttemptID  *string
-	SourceDeliveryID *string
-	ReplacesID       *string
-	ActivatedSeq     *int64
+	ID                 string
+	ProjectID          string
+	Text               string
+	State              string
+	Author             string
+	SourceSessionID    *string
+	SourceTaskID       *string
+	SourceAttemptID    *string
+	SourceDeliveryID   *string
+	SourceOwnerEntryID *string
+	ReplacesID         *string
+	ActivatedSeq       *int64
 }
 
 func (q *Queries) InsertProjectMemoryEntry(ctx context.Context, arg InsertProjectMemoryEntryParams) (ProjectMemoryEntry, error) {
@@ -237,6 +243,7 @@ func (q *Queries) InsertProjectMemoryEntry(ctx context.Context, arg InsertProjec
 		arg.SourceTaskID,
 		arg.SourceAttemptID,
 		arg.SourceDeliveryID,
+		arg.SourceOwnerEntryID,
 		arg.ReplacesID,
 		arg.ActivatedSeq,
 	)
@@ -256,12 +263,13 @@ func (q *Queries) InsertProjectMemoryEntry(ctx context.Context, arg InsertProjec
 		&i.EndedSeq,
 		&i.CreatedAt,
 		&i.DecidedAt,
+		&i.SourceOwnerEntryID,
 	)
 	return i, err
 }
 
 const listOpenProjectMemory = `-- name: ListOpenProjectMemory :many
-SELECT id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id, source_delivery_id, replaces_id, activated_seq, ended_seq, created_at, decided_at FROM project_memory_entries
+SELECT id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id, source_delivery_id, replaces_id, activated_seq, ended_seq, created_at, decided_at, source_owner_entry_id FROM project_memory_entries
 WHERE project_id = $1 AND state IN ('active', 'proposed')
 ORDER BY state = 'proposed', coalesce(activated_seq, 0), created_at, id
 `
@@ -291,6 +299,7 @@ func (q *Queries) ListOpenProjectMemory(ctx context.Context, projectID string) (
 			&i.EndedSeq,
 			&i.CreatedAt,
 			&i.DecidedAt,
+			&i.SourceOwnerEntryID,
 		); err != nil {
 			return nil, err
 		}
@@ -303,7 +312,7 @@ func (q *Queries) ListOpenProjectMemory(ctx context.Context, projectID string) (
 }
 
 const listProjectMemoryAt = `-- name: ListProjectMemoryAt :many
-SELECT id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id, source_delivery_id, replaces_id, activated_seq, ended_seq, created_at, decided_at FROM project_memory_entries
+SELECT id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id, source_delivery_id, replaces_id, activated_seq, ended_seq, created_at, decided_at, source_owner_entry_id FROM project_memory_entries
 WHERE project_id = $1
   AND activated_seq IS NOT NULL AND activated_seq <= $2::bigint
   AND (ended_seq IS NULL OR ended_seq > $2::bigint)
@@ -340,6 +349,7 @@ func (q *Queries) ListProjectMemoryAt(ctx context.Context, arg ListProjectMemory
 			&i.EndedSeq,
 			&i.CreatedAt,
 			&i.DecidedAt,
+			&i.SourceOwnerEntryID,
 		); err != nil {
 			return nil, err
 		}

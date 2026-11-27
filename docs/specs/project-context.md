@@ -211,7 +211,7 @@ front of its next Mainloop-delivered message, whoever sent it (the owner, main, 
 never interrupts a turn, and it is given once:
 
 ```text
-[mainloop:project-context] This project's context changed since your brief. Where they differ, this replaces what your brief said.
+[mainloop:context] Your context changed since you were given it. Where they differ, this replaces what you were given.
 ## Project instructions (owner, v4, were v3)
 <the new instructions>
 ## Project memory changes
@@ -224,12 +224,16 @@ never interrupts a turn, and it is given once:
 - Only what changed goes: instructions up to 1 KiB are sent whole, longer ones as the lines removed
   (`- `) and added (`+ `); cleared instructions say so. Memory lists the entries that became active
   and the ones that stopped being active (forgotten, revoked or replaced), not the whole set.
-- The block is at most 2 KiB. Past that it is cut at a whole line and ends with "… more changed:
-  call `project_context` for the current instructions and memory."
+- The block is at most 2 KiB, shared with [owner memory](owner-memory.md#where-it-loads)'s
+  changes, which follow the project's. Past that it is cut at a whole line and ends with "… more
+  changed: call `project_context` and `owner_memory` for the current context." Messages stored
+  before the rename carry the old `[mainloop:project-context]` marker; the web app still reads it.
 - What a session has is recorded on the delivery that gave it (`deliveries.given_instructions_version`
   and `given_memory_seq`), in the transaction that freezes the sent text, so a resend sends the same
   bytes. A session has what its newest such delivery gave, or with none, what its attempt's brief
   pinned. A delivery kagent never saw (failed or cancelled with no native task) does not count, so
   the change goes with the next message instead.
 - The mirrored message in the conversation stays what was written. The main session and sessions
-  that are not a task attempt's get nothing: main reads project context with `project_context`.
+  that are not a task attempt's get no project part: main reads project context with
+  `project_context`. Every session gets owner memory's part
+  ([owner memory](owner-memory.md#where-it-loads)).

@@ -1,7 +1,7 @@
 # Owner memory
 
-Status: **proposed**, not implemented. Nothing here is in `api/openapi.yaml`, `api/mcp-tools.json`
-or the server yet. It extends [project memory](project-context.md#project-memory), which is
+Status: **implemented** (server: `server/internal/ownermemory`, the `remember`, `forget` and
+`owner_memory` tools, `/owner/memory`; web: Settings → Memory). Live use is not measured. It extends [project memory](project-context.md#project-memory), which is
 implemented, with an owner scope; where this spec is silent, owner memory behaves as project memory
 does.
 
@@ -149,7 +149,7 @@ bump).
 
 ## API
 
-Described here, to be added to `api/openapi.yaml` first when this is built:
+In `api/openapi.yaml` (tag `owner-memory`):
 
 - `GET /owner/memory`: the active entries, then the lapsed ones, then the proposals, each oldest
   first, with `used_bytes`, `max_bytes` (3072), `max_entry_bytes` (500), `review_after_days` (the owner's
@@ -181,13 +181,15 @@ agents, Claude and Codex alike.
   on the attempt
   (`task_attempts.owner_memory_seq`) before the brief is first sent, like `memory_seq`.
 - **The main session:** in the context block of its first message, after the role line and the
-  shared guidance ([chat](chat.md)). The main binding records the owner memory sequence it was
-  given, as it records the guidance version.
+  shared guidance ([chat](chat.md)). The delivery that carries the block records the owner memory
+  sequence it gave (`deliveries.given_owner_memory_seq`); the binding has no column of its own.
 - **Running sessions:** a session given an older sequence gets the changes in front of its next
   Mainloop-delivered message, never mid-turn and only once, as project memory's changes are
   ([running sessions](project-context.md#running-sessions)). For a task it is an `## Owner memory
-changes` part of the same `[mainloop:project-context]` block (renamed `[mainloop:context]`
-  when built); for main it rides the context block. What a session has is recorded on the delivery
+changes` part of the `[mainloop:context]` block (formerly `[mainloop:project-context]`); main
+  gets the same block in front of a later message, and the whole section inside its context block
+  when that is rendered again. A session that was given no owner memory gets the whole
+  `## Owner memory` section in the block instead of the changes. What a session has is recorded on the delivery
   (`deliveries.given_owner_memory_seq`). The block's 2 KiB cap is shared.
 
 Rendered as:

@@ -17,7 +17,7 @@ func toMemoryEntry(e projectcontext.Entry) api.ProjectMemoryEntry {
 		CreatedAt: e.CreatedAt, DecidedAt: e.DecidedAt,
 		Source: api.ProjectMemorySource{
 			SessionId: e.Source.SessionID, TaskId: e.Source.TaskID,
-			AttemptId: e.Source.AttemptID, DeliveryId: e.Source.DeliveryID,
+			AttemptId: e.Source.AttemptID, DeliveryId: e.Source.DeliveryID, OwnerEntryId: e.Source.OwnerEntryID,
 		},
 	}
 }
