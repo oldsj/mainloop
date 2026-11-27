@@ -14,14 +14,14 @@ run at once. A few wait for the owner's approval card first:
 | Area           | Needs an approval card                                                                                                                                                                                  |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Home Assistant | Unlocking or opening a lock; opening or moving a cover (garage, gate, blinds); disarming an alarm; opener switches and buttons; scenes that set any of those; scripts and other calls it can't see into |
-| OpenCozy       | Approving or rejecting; granting screen time; opening or allowing a TV, and answering "Who's watching?"                                                                                                 |
+| OpenCozy       | Every call, reads included, for now (see [what enforces what](#what-enforces-what)). The aim is only approving or rejecting; granting screen time; opening or allowing a TV, and answering "Who's watching?" |
 
 Everything else runs directly. Main doesn't ask in chat first: the card is the question.
 
 ## The tools
 
-Four MCP servers, bound in the main thread's AgentTemplate beside `mainloop`. Two are approval-gated
-bindings (`requireApproval: true`):
+Three MCP servers are bound in the main thread's AgentTemplate beside `mainloop`, and a fourth is
+defined but unbound. Two of the bound ones are approval-gated (`requireApproval: true`):
 
 - **`home-tools`**, for Home Assistant: `find_entities`, `get_states`, `home_status` (locks, open
   doors and windows, doorbells, TVs and media that are on, the biggest power draws, alarms),
@@ -31,11 +31,12 @@ bindings (`requireApproval: true`):
   out.
 - **`home-tools-approval`**: the same server on another path, with only `secure_control`, which
   takes just the calls in the table above. Gated.
-- **`opencozy`**, OpenCozy's own MCP (`/api/mcp`) on the production instance: every read, and the
-  writes that run at once (closing or extending TVs, ending a TV session or iPad time, logging
-  chores and routine steps, adding, changing or removing TVs).
-- **`opencozy-approval`**: the same endpoint and credential, with only `approve`, `reject`,
-  `grant_screen_time`, `open_tvs`, `allow_tv` and `answer_whos_watching`. Gated.
+- **`opencozy-approval`**: OpenCozy's own MCP (`/api/mcp`) on the production instance, with every
+  OpenCozy tool. Gated.
+- **`opencozy`**: the same endpoint and credential, meant for the reads and the writes that run at
+  once (closing or extending TVs, ending a TV session or iPad time, logging chores and routine
+  steps, adding, changing or removing TVs). It's **unbound** until something enforces that split
+  (next section).
 
 Workers, supervisors and reviewers get none of these.
 
@@ -48,9 +49,13 @@ Workers, supervisors and reviewers get none of these.
   administration (restarts, reloads, backups, add-ons, people and zones) and targets the server
   can't see (areas, devices, floors, labels): every call names its entities. The token belongs to
   a non-admin user.
-- **OpenCozy: its scopes, and the bindings.** The credential holds every assistant scope, and
-  OpenCozy enforces them. OpenCozy has one endpoint, so which tool needs a card is decided by the
-  two bindings' `tools:` lists, not by OpenCozy.
+- **OpenCozy: its scopes, and the one gated binding.** The credential holds every assistant scope,
+  and OpenCozy enforces them. OpenCozy has one endpoint, and the kagent Claude harness drops a
+  binding's `tools:` list (its MCP server config has no tool filter). So an ungated `opencozy`
+  binding would expose `approve` and `grant_screen_time` with no card. The dev proof on
+  2026-11-27 ran `approve` that way, on an approval that didn't exist. Until OpenCozy serves the
+  card-free tools on their own endpoint, as home-tools does, or the harness enforces `tools:`,
+  every OpenCozy call goes through `opencozy-approval` and waits for a card.
 - **The approval: the harness.** `requireApproval` pauses the turn before the call (`tool_deferred`),
   Mainloop shows it as an approval card, and the call runs only on the owner's approval
   (`POST /hitl/{request_id}/respond`), as in [agents and permissions](../architecture/agents-and-permissions.md).
