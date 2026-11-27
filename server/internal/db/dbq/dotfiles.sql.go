@@ -49,17 +49,23 @@ func (q *Queries) GetDotfilesBundle(ctx context.Context, digest string) ([]byte,
 }
 
 const getDotfilesExport = `-- name: GetDotfilesExport :one
-SELECT repository, commit, path, status, reason, digest, findings, created_at FROM dotfiles_exports WHERE repository = $1 AND commit = $2 AND path = $3
+SELECT repository, commit, path, status, reason, digest, findings, created_at, format FROM dotfiles_exports WHERE repository = $1 AND commit = $2 AND path = $3 AND format = $4
 `
 
 type GetDotfilesExportParams struct {
 	Repository string
 	Commit     string
 	Path       string
+	Format     int32
 }
 
 func (q *Queries) GetDotfilesExport(ctx context.Context, arg GetDotfilesExportParams) (DotfilesExport, error) {
-	row := q.db.QueryRow(ctx, getDotfilesExport, arg.Repository, arg.Commit, arg.Path)
+	row := q.db.QueryRow(ctx, getDotfilesExport,
+		arg.Repository,
+		arg.Commit,
+		arg.Path,
+		arg.Format,
+	)
 	var i DotfilesExport
 	err := row.Scan(
 		&i.Repository,
@@ -70,6 +76,7 @@ func (q *Queries) GetDotfilesExport(ctx context.Context, arg GetDotfilesExportPa
 		&i.Digest,
 		&i.Findings,
 		&i.CreatedAt,
+		&i.Format,
 	)
 	return i, err
 }
@@ -207,15 +214,16 @@ func (q *Queries) InsertDotfilesBundle(ctx context.Context, arg InsertDotfilesBu
 }
 
 const insertDotfilesExport = `-- name: InsertDotfilesExport :exec
-INSERT INTO dotfiles_exports (repository, commit, path, status, reason, digest, findings)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-ON CONFLICT (repository, commit, path) DO NOTHING
+INSERT INTO dotfiles_exports (repository, commit, path, format, status, reason, digest, findings)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (repository, commit, path, format) DO NOTHING
 `
 
 type InsertDotfilesExportParams struct {
 	Repository string
 	Commit     string
 	Path       string
+	Format     int32
 	Status     string
 	Reason     string
 	Digest     *string
@@ -228,6 +236,7 @@ func (q *Queries) InsertDotfilesExport(ctx context.Context, arg InsertDotfilesEx
 		arg.Repository,
 		arg.Commit,
 		arg.Path,
+		arg.Format,
 		arg.Status,
 		arg.Reason,
 		arg.Digest,

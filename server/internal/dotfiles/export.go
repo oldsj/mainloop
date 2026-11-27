@@ -38,6 +38,12 @@ const (
 	ReasonRepositoryUnavailable = "repository_unavailable"
 )
 
+// ExportFormat is the format of the exports this code makes, part of a stored export's key. Bump it
+// whenever what an export keeps or how it is bundled changes, so an export stored under an older
+// format is read again rather than reused (a test holds a bump to that). 1: the first export; 2:
+// claude/settings.json is kept (#564).
+const ExportFormat = 2
+
 // RefResolver resolves a branch, tag or commit to a full commit SHA. [*github.App] satisfies it.
 type RefResolver interface {
 	CommitSHA(ctx context.Context, repo github.Repo, ref string) (string, error)
@@ -103,8 +109,8 @@ func (e *Exports) Resolve(ctx context.Context, src Source) (string, *Result) {
 	return sha, nil
 }
 
-// Export returns src's directory at commit: from the stored export when there is one, else read
-// from GitHub, checked and stored. A refusal is stored too, since the same commit always gives the
+// Export returns src's directory at commit: from the stored export of [ExportFormat] when there is
+// one, else read from GitHub, checked and stored. A refusal is stored too, since the same commit always gives the
 // same answer; an unavailable read is not.
 func (e *Exports) Export(ctx context.Context, src Source, commit string) (Result, error) {
 	key := exportKey(src, commit)
@@ -169,15 +175,18 @@ func (e *Exports) BundleContent(ctx context.Context, digest string) ([]byte, boo
 	return content, true, nil
 }
 
-type key struct{ repository, commit, path string }
+type key struct {
+	repository, commit, path string
+	format                   int32
+}
 
 // exportKey compares repositories case-insensitively, as GitHub does.
 func exportKey(src Source, commit string) key {
-	return key{repository: strings.ToLower(src.Repository), commit: commit, path: src.Path}
+	return key{repository: strings.ToLower(src.Repository), commit: commit, path: src.Path, format: ExportFormat}
 }
 
 func (e *Exports) stored(ctx context.Context, k key) (Result, bool, error) {
-	row, err := dbq.New(e.Pool).GetDotfilesExport(ctx, dbq.GetDotfilesExportParams{Repository: k.repository, Commit: k.commit, Path: k.path})
+	row, err := dbq.New(e.Pool).GetDotfilesExport(ctx, dbq.GetDotfilesExportParams{Repository: k.repository, Commit: k.commit, Path: k.path, Format: k.format})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Result{}, false, nil
 	}
@@ -214,7 +223,7 @@ func (e *Exports) store(ctx context.Context, k key, r Result) error {
 			}
 		}
 		return q.InsertDotfilesExport(ctx, dbq.InsertDotfilesExportParams{
-			Repository: k.repository, Commit: k.commit, Path: k.path,
+			Repository: k.repository, Commit: k.commit, Path: k.path, Format: k.format,
 			Status: r.Status, Reason: r.Reason, Digest: digest, Findings: findings,
 		})
 	})
