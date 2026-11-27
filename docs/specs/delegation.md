@@ -8,7 +8,7 @@ Main at depth zero creates supervisors. In a project it does not delegate: its `
 
 `delegate` accepts `request_id`, `title`, `brief`, `mode`, optional `project_id`, `topic_id`, `provider_profile_id`, `model`, `effort` and typed `checkout`. Code tasks require an owned project and checkout; coordination tasks have no repository authority. The service chooses role, depth, owner, root and native configuration. Provider constraints and admission caps apply through the shared service. Reusing a request ID with identical input returns the original operation; changed input conflicts. A returned pending operation is not a running native session.
 
-Cluster and homelab ops requests go to the [ops agent](ops-agent.md): a coordination task on the `ops` provider profile. Household and personal reads (Home Assistant, OpenCozy, Gmail, Calendar, Todoist) aren't delegated: main reads them itself with its [home tools](home-tools.md) and [personal tools](personal-tools.md).
+Cluster and homelab ops requests go to the [ops agent](ops-agent.md): a coordination task on the `ops` provider profile. Household requests and personal reads (Home Assistant, OpenCozy, Gmail, Calendar, Todoist) aren't delegated: main handles them itself with its [home tools](home-tools.md) and [personal tools](personal-tools.md).
 
 Reuse the request ID after a lost or uncertain response. After a confirmed terminal `blocked` create, a new create requires a **new** request ID; replaying the old ID returns the recorded blocked operation.
 

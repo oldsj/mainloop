@@ -2,7 +2,7 @@
 
 Status: **proposed.** The tool server and its kagent RemoteMCPServer are in
 the private deployment repository. They aren't bound to the main thread's Agent yet. That binding comes
-with the [home tools](home-tools.md), after a live proof on mainloop-dev. Nothing here is proven
+after the [home tools](home-tools.md), in its own change, after a live proof on mainloop-dev. Nothing here is proven
 live. Mainloop's code doesn't change: like the home tools, this is kagent and infrastructure
 configuration, and this spec covers what main can do with it.
 
@@ -61,5 +61,5 @@ service's tools answer that it isn't connected yet.
 ## Picking them up
 
 Like the home tools, the binding reaches only a **new** main Session (see
-[home tools](home-tools.md#picking-them-up)). Both sets are bound in one change, so the owner
-restarts main once.
+[home tools](home-tools.md#picking-them-up)). They're bound in their own change, so main restarts
+once more.
