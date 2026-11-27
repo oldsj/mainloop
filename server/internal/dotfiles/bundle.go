@@ -45,6 +45,7 @@ const (
 	ReasonUnsupportedFile = "unsupported_file"
 	ReasonNothingToExport = "nothing_to_export"
 	ReasonSecretFound     = "secret_found"
+	ReasonInvalidSettings = "invalid_settings"
 )
 
 // Select reads a tar of the repository at one commit, as `git archive` writes it, and returns the
@@ -52,7 +53,8 @@ const (
 //
 //   - AGENTS.md and CLAUDE.md;
 //   - skills/<name>/** for each skill directory that holds a SKILL.md;
-//   - agents/<name>.md and commands/<name>.md.
+//   - agents/<name>.md and commands/<name>.md;
+//   - claude/settings.json, which must pass CheckClaudeSettings.
 //
 // Anything else is ignored. A symlink or any other non-regular entry where a file would be kept,
 // and an export past lim, are a *Refusal; nothing is partially exported.
@@ -102,7 +104,14 @@ func Select(archive io.Reader, dir string, lim Limits) ([]File, error) {
 	}
 	kept = withSkillManifests(kept)
 	if len(kept) == 0 {
-		return nil, &Refusal{Reason: ReasonNothingToExport, Detail: "the directory holds no AGENTS.md, CLAUDE.md, skills, agents or commands"}
+		return nil, &Refusal{Reason: ReasonNothingToExport, Detail: "the directory holds no AGENTS.md, CLAUDE.md, skills, agents, commands or claude/settings.json"}
+	}
+	for _, f := range kept {
+		if f.Path == ClaudeSettingsPath {
+			if err := CheckClaudeSettings(f.Data); err != nil {
+				return nil, &Refusal{Reason: ReasonInvalidSettings, Detail: err.Error()}
+			}
+		}
 	}
 	slices.SortFunc(kept, func(a, b File) int { return strings.Compare(a.Path, b.Path) })
 	return kept, nil
@@ -112,7 +121,7 @@ func Select(archive io.Reader, dir string, lim Limits) ([]File, error) {
 // its SKILL.md.
 func candidate(rel string) bool {
 	switch rel {
-	case "AGENTS.md", "CLAUDE.md":
+	case "AGENTS.md", "CLAUDE.md", ClaudeSettingsPath:
 		return true
 	}
 	parts := strings.Split(rel, "/")

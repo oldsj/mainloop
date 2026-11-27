@@ -4234,7 +4234,7 @@ export interface components {
       status: 'ready' | 'none' | 'unavailable' | 'refused';
       /**
        * Reason
-       * @description Why there is no bundle, empty when `status` is `ready` or `none`. One of `app_not_installed`, `ref_not_found`, `repository_unavailable`, `over_limits`, `unsupported_file`, `nothing_to_export` or `secret_found`.
+       * @description Why there is no bundle, empty when `status` is `ready` or `none`. One of `app_not_installed`, `ref_not_found`, `repository_unavailable`, `over_limits`, `unsupported_file`, `nothing_to_export`, `secret_found` or `invalid_settings`.
        */
       reason: string;
       /**
