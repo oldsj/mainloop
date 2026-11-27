@@ -21,7 +21,7 @@ The tools follow the MCP grant, not the role:
 Code tasks do not file issues. Their findings reach the owner through `report`, and the main thread
 or a coordination supervisor, which sees the wider picture and can find a duplicate, files the
 issue. That keeps one place deciding what becomes an issue and keeps a busy code task from opening
-issues the owner then has to triage. The guidance every session receives says the same (guidance v7,
+issues the owner then has to triage. The guidance every session receives says the same (since guidance v7,
 [delegation](delegation.md)).
 
 `comment_pull_request` is different: reviewing a pull request is usually a code task's work, and

@@ -22,11 +22,10 @@ const carryMessageChars = 600
 // mainContext opens the first message to every main Session: what the agent is, then the guidance
 // every Mainloop agent gets. Its first line carries the marker, and no other line starts with one,
 // so the carried messages after it cannot be mistaken for it.
-const mainContext = "[mainloop:context] You are the Mainloop main agent, the owner's home chat. " +
-	"You are the top of three layers: a project's work goes to that project's standing supervisor with " +
-	"`supervisor_send` (its first use starts it), which delegates to workers and reviewers and reports back to " +
-	"you; `delegate` is for work outside any project. Tasks report back to you. To make a repository a " +
-	"project, propose it with `project_propose`; the owner approves it from one Needs-you card.\n\n" + agentcontext.Guidance
+const mainContext = "[mainloop:context] You are the Mainloop main agent, the owner's home chat and the top of three layers. " +
+	"Send a project's work to its standing supervisor with `supervisor_send`; it delegates to workers and reviewers " +
+	"and reports back to you. `delegate` only work outside any project; those tasks report back to you. " +
+	"To make a repository a project, `project_propose` it; the owner approves it from one Needs-you card.\n\n" + agentcontext.Guidance
 
 // frozenText returns the text a delivery sends and freezes it in the transaction that moves the row
 // to sending, so one A2A messageId always carries one payload.

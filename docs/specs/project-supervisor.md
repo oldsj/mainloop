@@ -59,8 +59,9 @@ model settings, and retiring it.
   `409 supervisor_starting` and main sends again under the same `request_id`.
 - Main's `delegate` with a `project_id` is refused `409 project_supervisor` (see
   [delegation](delegation.md)); without one it still makes a root coordination task.
-- The line naming main's role in its first message says this (guidance v7): a project's work goes to
-  its supervisor with `supervisor_send`, `delegate` is for work outside any project. Main's existing
+- The line naming main's role in its first message says this (since guidance v7; v9 shortened it): a
+  project's work goes to its supervisor with `supervisor_send`, `delegate` is for work outside any
+  project. Main's existing
   sessions get it with their next message.
 - Main uses `follow_up`, `steer`, `task_get` and `task_transcript` on the supervisor's task id as on
   any task, and `task_list` shows it with `standing: true`.
@@ -198,8 +199,8 @@ How to ask for a restart:
 Every attempt's first message is a coordination task's brief, with a **Standing supervisor**
 section after the stored brief: it is the project's standing supervisor and the middle of three
 layers; it never completes, reports `completed` and ends its turn when a batch is done, and reports
-`blocked`, never `failed`; it hands code to workers with `delegate` and arms a loop or ends its turn
-rather than polling. The section is rendered, not stored, so a change of wording reaches the next
+`blocked`, never `failed`; it hands code to workers with `delegate`, manages them with the task
+tools, and arms a loop or ends its turn rather than polling. The section is rendered, not stored, so a change of wording reaches the next
 attempt.
 
 ## API
