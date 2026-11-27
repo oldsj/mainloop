@@ -63,12 +63,49 @@ ignored whole. The destinations are where kagent lays them out (see "Delivery an
 | `skills/<name>/**` with `SKILL.md` | `skills/<name>/`                                      | `skills/<name>/`                   |
 | `agents/<name>.md`                 | `agents/<name>.md` (subagents)                        | not mapped (Codex agents are TOML) |
 | `commands/<name>.md`               | `commands/<name>.md`                                  | not mapped (deprecated in Codex)   |
+| `claude/settings.json`             | not laid out; merged into the SDK runner's settings   | not mapped                         |
 
 The destinations are the CLIs' user-level directories as kagent sets them for a session
 (`CLAUDE_CONFIG_DIR=/data/claude`, `CODEX_HOME=/data/codex`), not `~/.claude` or `~/.codex`. Claude
 loads only the user setting source, which is that directory. Codex still scans `$CODEX_HOME/skills`
 as a user skills root (its current docs name `~/.agents/skills`; `$CODEX_HOME/skills` is kept for
 compatibility), which does not depend on how `HOME` is set.
+
+## Claude settings
+
+Implemented in Mainloop's export and in kagent (oldsj/kagent#123); not yet proven live.
+`claude/settings.json` carries the owner's auto mode and permission rules, for parity with the
+`autoMode` and `permissions` blocks of a local `~/.claude/settings.json`. It may hold only these
+keys, each a list of non-empty strings, plus an optional `$schema`:
+
+- `autoMode.environment`, `autoMode.allow`, `autoMode.soft_deny`, `autoMode.hard_deny`;
+- `permissions.allow`, `permissions.deny`, `permissions.ask`.
+
+Anything else (a mode, `disableBypassPermissionsMode`, hooks, `env`, MCP servers, helpers) refuses
+the export as `invalid_settings`. The refusal names the key, never a value. A directory holding
+only this file exports.
+
+kagent never writes the file into `CLAUDE_CONFIG_DIR`, since the agent could rewrite it there
+between turns. The Claude SDK runner reads it from the verified bundle in harness memory each
+time it starts, and joins its lists under the harness's own settings layer, dotfiles entries
+first. Every other key stays the harness's, so the file can't change the permission mode, undo
+the locked mode or `disableBypassPermissionsMode`, or remove the harness's ask rules and
+approval hook. Those run before any allow rule, so an approval card stays a card. Claude Code
+reads `autoMode` from that layer (a project's `.claude/settings.json` can't set it).
+
+- Sessions on the process driver (workspace workers that run with
+  `--dangerously-skip-permissions`) ignore the file. Auto mode doesn't apply there, and an ask
+  rule would deny the call outright.
+- Codex maps nothing. It has no auto mode classifier. The nearest equivalent, execpolicy rules
+  under `CODEX_HOME/rules`, is not mapped.
+
+A kagent harness from before oldsj/kagent#123 refuses a whole bundle that holds this file, and its
+sessions run without dotfiles. Commit the file only after the harnesses are repinned.
+
+Example (fictional) environment entries:
+`"$defaults"`, `"Trusted source control: github.com/example-org"`,
+`"Trusted internal domains: *.example.internal"`,
+`"Trusted cluster: Kubernetes context example-cluster, namespaces example-app and example-agents"`.
 
 ## Implemented: pinning, export and recording (Mainloop)
 
@@ -85,7 +122,8 @@ transaction open:
 3. Only the allowed paths are kept. The export is refused when one of them is a symlink or any
    other non-regular file, or past the limits: more than 4000 files, a file over 2 MiB, or more
    than 16 MiB in all. Submodules are not part of a git archive. A directory with none of the
-   allowed files is refused as `nothing_to_export`.
+   allowed files is refused as `nothing_to_export`, and a `claude/settings.json` with keys beyond
+   the rule lists (see "Claude settings") as `invalid_settings`.
 4. Exactly the exported files are scanned for secrets: private keys; GitHub, AWS, Slack,
    Anthropic, OpenAI, Google and Stripe key formats; JWTs; credentials in URLs; and a literal
    assigned to a credential-named variable or key (`export X_TOKEN=...`, `"client_secret": "..."`;
@@ -229,6 +267,7 @@ without dotfiles and records the reason where the commit would show:
 | Over a limit, or a non-regular file                 | `refused`     | `over_limits`, `unsupported_file`             |
 | None of the allowed files in the directory          | `refused`     | `nothing_to_export`                           |
 | Secret found                                        | `refused`     | `secret_found`                                |
+| `claude/settings.json` beyond the rule lists        | `refused`     | `invalid_settings`                            |
 
 ## Precedence
 

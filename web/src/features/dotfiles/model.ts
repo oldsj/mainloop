@@ -46,8 +46,9 @@ const REASONS: Record<string, string> = {
   repository_unavailable: 'GitHub could not be read',
   over_limits: 'over the size limits',
   unsupported_file: 'holds a symlink or another unsupported file',
-  nothing_to_export: 'no AGENTS.md, CLAUDE.md, skills, agents or commands there',
-  secret_found: 'a possible secret was found'
+  nothing_to_export: 'no AGENTS.md, CLAUDE.md, skills, agents, commands or Claude settings there',
+  secret_found: 'a possible secret was found',
+  invalid_settings: 'claude/settings.json holds more than auto mode and permission rule lists'
 };
 
 /** One line for a session's pinned dotfiles: the repository and the short commit, or why none. */
