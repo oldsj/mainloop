@@ -25,6 +25,8 @@ holds this per project, next to the repository, not in it.
   project: how a Mainloop agent works at all.
 - **Owner-wide** instructions and skills across every project are the proposed
   [agent dotfiles](agent-dotfiles.md), not this.
+- **Owner-wide memory**, the owner's preferences learned in chat and true across projects, is the
+  proposed [owner memory](owner-memory.md), not project memory.
 
 ## Project instructions
 
