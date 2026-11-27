@@ -31,13 +31,13 @@ WHERE project_id = $1 AND version = sqlc.arg(expected_version)
 RETURNING *;
 
 -- name: GetDotfilesExport :one
-SELECT * FROM dotfiles_exports WHERE repository = $1 AND commit = $2 AND path = $3;
+SELECT * FROM dotfiles_exports WHERE repository = $1 AND commit = $2 AND path = $3 AND format = $4;
 
 -- A concurrent export of the same commit wrote the same row; the second write changes nothing.
 -- name: InsertDotfilesExport :exec
-INSERT INTO dotfiles_exports (repository, commit, path, status, reason, digest, findings)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-ON CONFLICT (repository, commit, path) DO NOTHING;
+INSERT INTO dotfiles_exports (repository, commit, path, format, status, reason, digest, findings)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+ON CONFLICT (repository, commit, path, format) DO NOTHING;
 
 -- name: InsertDotfilesBundle :exec
 INSERT INTO dotfiles_bundles (digest, content) VALUES ($1, $2)

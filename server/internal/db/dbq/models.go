@@ -310,6 +310,7 @@ type DotfilesExport struct {
 	Digest     *string
 	Findings   json.RawMessage
 	CreatedAt  time.Time
+	Format     int32
 }
 
 type EnvironmentGrant struct {

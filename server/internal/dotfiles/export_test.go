@@ -115,6 +115,52 @@ func TestExportReadsTheCommitOnceAndKeepsIt(t *testing.T) {
 	}
 }
 
+// An export stored under an older format is not reused: the same commit is read again under
+// [dotfiles.ExportFormat] and stored beside it, and the older bundle stays downloadable for the
+// Sessions that hold it.
+func TestExportFormatBumpReadsTheSameCommitAgain(t *testing.T) {
+	d := testdb.New(t)
+	ctx := context.Background()
+	sha, pack := fixtureRepo(t, fixture)
+	seeder := &devlooptest.Seeder{Payload: pack}
+	e := &dotfiles.Exports{Pool: d.Pool, Refs: &refs{sha: sha}, Seeder: seeder}
+	src := dotfiles.Source{Repository: "example/dotfiles", Path: "home/.agents"}
+
+	// Given the commit's export stored under the previous format, with that format's own bundle.
+	const older = "sha256:" + "0000000000000000000000000000000000000000000000000000000000000001"
+	if _, err := d.Pool.Exec(ctx, `INSERT INTO dotfiles_bundles (digest, content) VALUES ($1, 'older')`, older); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Pool.Exec(ctx, `INSERT INTO dotfiles_exports (repository, commit, path, format, status, digest)
+		VALUES ('example/dotfiles', $1, 'home/.agents', $2, 'ready', $3)`, sha, dotfiles.ExportFormat-1, older); err != nil {
+		t.Fatal(err)
+	}
+
+	// When the commit is exported under the current format.
+	got, err := e.Export(ctx, src, sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Then it was read again, not taken from the older row.
+	if seeder.Calls != 1 || got.Status != dotfiles.StatusReady || got.Digest == older || !strings.HasPrefix(got.Digest, "sha256:") {
+		t.Fatalf("export = %+v after %d reads, want a fresh read under format %d", got, seeder.Calls, dotfiles.ExportFormat)
+	}
+	// And the new export is kept: exporting again reads nothing.
+	again, err := e.Export(ctx, src, sha)
+	if err != nil || again.Digest != got.Digest || seeder.Calls != 1 {
+		t.Fatalf("second export = %+v, %v after %d reads", again, err, seeder.Calls)
+	}
+	// And both formats' rows and bundles remain.
+	var rows int
+	if err := d.Pool.QueryRow(ctx, `SELECT count(*) FROM dotfiles_exports WHERE commit = $1`, sha).Scan(&rows); err != nil || rows != 2 {
+		t.Fatalf("export rows = %d, err %v, want one per format", rows, err)
+	}
+	if content, ok, err := e.BundleContent(ctx, older); err != nil || !ok || string(content) != "older" {
+		t.Fatalf("older bundle: ok=%v err=%v", ok, err)
+	}
+}
+
 func TestExportRefusesASecretAndRemembersTheRefusal(t *testing.T) {
 	d := testdb.New(t)
 	ctx := context.Background()

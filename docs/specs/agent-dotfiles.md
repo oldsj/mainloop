@@ -133,8 +133,12 @@ transaction open:
    where git marked the file executable, no owner, every time the Unix epoch) and stored once by
    its `sha256:` digest.
 
-A commit's directory always exports the same way, so a ready or refused export is kept per
-`(repository, commit, path)` and not read again; an unavailable read is not kept. Each GitHub read
+A commit's directory always exports the same way under one export format, so a ready or refused
+export is kept per `(repository, commit, path, format)` and not read again; an unavailable read is
+not kept. The format (`ExportFormat`) is bumped whenever what an export keeps or how it is bundled
+changes, so an export stored under an older format is read again: format 2 keeps
+`claude/settings.json`, which format 1 dropped. Stored bundles are never removed, so a Session keeps
+the digest it holds until it is refreshed. Each GitHub read
 is bounded to 10 seconds, so a pin fits inside the delivery lease it runs under.
 
 The pin `{repository, ref, path, commit, digest, status, reason}` is recorded per create request,
