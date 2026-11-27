@@ -89,23 +89,30 @@ ever, as project memory's do.
 
 Each entry carries `created_at` and `last_confirmed_at`. `last_confirmed_at` starts when the entry
 becomes active and moves only when the owner confirms it: **Keep** in the owner view, keeping a
-lapsed entry, or main recording the same text again from the owner's words.
+lapsed entry, or main recording the same text again from the owner's words. Nothing else
+confirms an entry: an agent using it, citing it or following it without complaint does not, so
+silence never keeps a line alive.
 
-- **Due for review:** an active entry not confirmed in **60 days** is due. It is still loaded, and
-  it appears in the owner view's review queue as "Still true?" with **Keep** and **Forget**.
-- **Lapsed:** a due entry not kept within a further **14 days** is moved to `lapsed` by the
+- **Review window:** an owner setting, `review_after_days`, **14 days by default**, from 1 to 365.
+  Changing it applies to every entry at once, from its `last_confirmed_at`; it never confirms
+  anything.
+- **Due for review:** an active entry not confirmed within the review window is due. It is still
+  loaded, and it appears in the owner view's review queue as "Still true?" with **Keep** and
+  **Forget**.
+- **Lapsed:** a due entry not kept within a further **7 days** (fixed) is moved to `lapsed` by the
   attention sweep. It stops being loaded into new briefs and running sessions (they are told it was
   removed, below), and it stays in the owner view until the owner keeps or forgets it.
 - **Age is always shown.** Rendered entries carry the date they were last confirmed, so an agent
-  can weigh a line confirmed last week against one confirmed two months ago, and the owner sees
+  can weigh a line confirmed yesterday against one confirmed three weeks ago, and the owner sees
   each entry's age in the view.
 - **Contradiction:** an agent that finds an entry wrong does not act on its own judgement against
   it. Main asks the owner, or replaces the entry when the owner has just said otherwise. A task
   says so in its report, and may propose a replacement.
 
-The review window is long enough that a real standing preference costs the owner one tap every two
-months, and short enough that a line nobody looked at since a different way of working stops
-steering agents within about ten weeks.
+With the default, a real standing preference costs the owner one tap every two weeks, and a line
+nobody has looked at stops steering agents within three weeks. An owner whose preferences are
+steadier can lengthen the window; the cost of a short one is review taps, the cost of a long one
+is agents following a line that stopped being true.
 
 ## Tools
 
@@ -136,8 +143,8 @@ bump).
 Described here, to be added to `api/openapi.yaml` first when this is built:
 
 - `GET /owner/memory`: the active entries, then the lapsed ones, then the proposals, each oldest
-  first, with `used_bytes`, `max_bytes` (3072), `max_entry_bytes` (500), `review_after_days` (60)
-  and `grace_days` (14). Each entry carries `author`, `source` (session, task, attempt and delivery
+  first, with `used_bytes`, `max_bytes` (3072), `max_entry_bytes` (500), `review_after_days` (the owner's
+  setting, default 14) and `grace_days` (7). Each entry carries `author`, `source` (session, task, attempt and delivery
   ids), `replaces_id`, `state`, `created_at`, `last_confirmed_at`, `decided_at`, and `due_at` (when
   it becomes due; past for a due entry).
 - `POST /owner/memory/{entry_id}/decision` with `{decision}`: `accept` or `reject` (a proposal),
@@ -145,6 +152,9 @@ Described here, to be added to `api/openapi.yaml` first when this is built:
   `forget` (an active or lapsed entry) and `moved` (an active or lapsed entry). A decision that
   finds the entry already where it would leave it answers it again; any other state is 409, as is
   an accept or keep past the bound. 404 for an entry that is not the owner's.
+- `PUT /owner/memory/settings` with `{review_after_days}` (integer, 1 to 365): the saved setting.
+  422 outside the range. It is an owner setting, not policy, so it is not gated on
+  `MAINLOOP_OWNER_POLICY_WRITES_ENABLED`.
 
 Writes take an owner-level row lock, so concurrent accepts and keeps never pass the bound.
 
@@ -194,6 +204,7 @@ Settings gets a **Memory** section (`/settings#memory`):
 
 - **Waiting for you (N):** proposals, with text, the entry each would replace, who proposed it and
   when (linked to the task or session turn), and **Accept** / **Reject**.
+- **Review window:** "Ask me if still true after N days" (default 14), saved as it changes.
 - **Still true? (N):** due and lapsed entries, oldest confirmation first. A lapsed one is marked
   "Not loaded since <date>". Each has **Keep** and **Forget**.
 - **Active:** every loaded entry with its age ("confirmed 12 days ago"), its source link ("By main,
@@ -235,8 +246,9 @@ Server, with Postgres and fakes, no live agents:
   it), 10 open proposals.
 - `replaces` ends the old entry on activation; repeating active text by main confirms it, by a
   worker does not.
-- Staleness with an injected clock: due at 60 days, still rendered; lapsed at 74 days with a new
-  sequence number; keep returns it to active and resets the clock; forget and moved are final.
+- Staleness with an injected clock: due at 14 days by default, still rendered; lapsed at 21 days
+  with a new sequence number; a changed `review_after_days` moves every entry's due date and confirms
+  none; an agent reading or citing an entry does not confirm it; keep returns it to active and resets the clock; forget and moved are final.
 - Rendering: section placement in code and coordination briefs, absolute dates, a pinned resend is
   byte-identical, empty set adds nothing, the brief size test updated for the new budget.
 - Running sessions: a task and the main session each get the change once on their next message,
@@ -247,19 +259,19 @@ Server, with Postgres and fakes, no live agents:
 Web, with mocked API responses: the three lists, each decision, a refused decision, the age and
 source rendering, and Move to dotfiles with and without a dotfiles source.
 
-Not measured by any of this: whether agents follow owner memory, and whether 60 days is the right
-window. Both need use.
+Not measured by any of this: whether agents follow owner memory, and whether 14 days is the right
+default. Both need use.
 
 ## Open questions
 
-- **The review window.** 60 days plus 14 is a guess. Should the owner set it, or should an entry
-  carry its own ("until the end of the quarter")?
+- **Per-entry windows.** The window is one owner setting. Should an entry carry its own ("until
+  the end of the quarter"), or a long-lived one be exempt until moved to dotfiles?
+- **The grace period.** 7 days after due, fixed. Should it follow the window, or be the owner's
+  setting too?
 - **Workers proposing.** Should workers have the owner scope at all, or only main and supervisors?
   Workers rarely hear the owner directly; dropping it would cut a source of noisy proposals.
 - **Main's judgement of scope.** Main decides whether a line is owner-wide or one project's. A
   wrong guess is cheap to fix in the view, but the view could offer **Move to project** too.
-- **Confirmation by use.** Should an entry that agents cite and the owner does not dispute count as
-  confirmed? This spec says no: only the owner confirms, so silence never keeps a line alive.
 - **Detecting a move.** Mainloop could notice an entry's text in the exported dotfiles `AGENTS.md`
   and suggest **I've moved it**. Useful, but a fuzzy match; left out for now.
 - **The 3072-byte bound.** Tight on purpose. If the owner keeps hitting `memory_full` with entries
