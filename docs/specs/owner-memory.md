@@ -48,9 +48,13 @@ An owner memory entry is a project memory entry without a project.
 - **Who records what:**
   - The **main session** records the owner's own words, and its entries are `active` at once. It
     does not record facts it verified, even true ones: those are Mainloop's records (above).
-  - **Supervisors, workers and workspace agents** may only propose (`proposed`), because they read
+  - **Supervisors** (tasks without a parent) may only propose (`proposed`), because they read
     untrusted input. The owner accepts or rejects a proposal. A typical proposal is a supervisor
     passing on something the owner told it through `supervisor_send`.
+  - **Workers** (child tasks) and **workspace agents** cannot record owner memory at all: they
+    rarely hear the owner directly, and most of what they read is untrusted. A `remember` or
+    `forget` with `scope: owner` from one is `forbidden`. They still read owner memory, and may
+    say in a report that an entry looks wrong.
 - **Source:** as in project memory, the server records the recording session, its task and
   attempt for a task, and the session's latest delivery (the turn it was in). The owner view links
   to that turn, so the owner can see the words an entry was taken from.
@@ -78,7 +82,7 @@ An owner memory entry is a project memory entry without a project.
 | `withdrawn` | no                   | the proposing session withdraws its own proposal                       | yes   |
 | `replaced`  | no                   | a replacing entry becomes active                                       | yes   |
 | `forgotten` | no                   | main forgets an active entry; owner forgets an active or lapsed one    | yes   |
-| `moved`     | no                   | owner marks an active or lapsed entry as moved to dotfiles             | yes   |
+| `moved`     | no                   | owner moves an active or lapsed entry to dotfiles or to a project      | yes   |
 
 `lapsed` is not final: the owner can keep it (back to `active`, confirmed now) or forget it.
 Nothing is deleted without a decision by the owner or main. Every change into or out of `active`
@@ -93,15 +97,16 @@ lapsed entry, or main recording the same text again from the owner's words. Noth
 confirms an entry: an agent using it, citing it or following it without complaint does not, so
 silence never keeps a line alive.
 
-- **Review window:** an owner setting, `review_after_days`, **14 days by default**, from 1 to 365.
-  Changing it applies to every entry at once, from its `last_confirmed_at`; it never confirms
-  anything.
+- **Review window:** one owner setting, `review_after_days`, **14 days by default**, from 1 to
+  365, for every entry; an entry has no window of its own. Changing it applies to every entry at
+  once, from its `last_confirmed_at`; it never confirms anything.
 - **Due for review:** an active entry not confirmed within the review window is due. It is still
   loaded, and it appears in the owner view's review queue as "Still true?" with **Keep** and
   **Forget**.
-- **Lapsed:** a due entry not kept within a further **7 days** (fixed) is moved to `lapsed` by the
+- **Lapsed:** a due entry not kept within a further **7 days** is moved to `lapsed` by the
   attention sweep. It stops being loaded into new briefs and running sessions (they are told it was
-  removed, below), and it stays in the owner view until the owner keeps or forgets it.
+  removed, below), and it stays in the owner view until the owner keeps or forgets it. The 7-day
+  grace is fixed, not a setting.
 - **Age is always shown.** Rendered entries carry the date they were last confirmed, so an agent
   can weigh a line confirmed yesterday against one confirmed three weeks ago, and the owner sees
   each entry's age in the view.
@@ -122,8 +127,12 @@ memory, so a forgotten argument is a validation error rather than a silent owner
 - `remember(text, scope?, project_id?, replaces?)`: `scope` is `project` (the default) or
   `owner`. With `project`, `project_id` is required, as today. With `owner`, `project_id` must be
   absent and `replaces` names an owner entry. The answer adds `scope` to today's fields.
-- `forget(entry_id, scope?, project_id?)`: the same rule. Main forgets an active owner entry; any
-  other session withdraws its own owner proposal.
+- `forget(entry_id, scope?, project_id?)`: the same rule. Main forgets an active owner entry; a
+  supervisor withdraws its own owner proposal.
+
+`scope: owner` on either tool is for main and supervisors only; from a worker or workspace agent it
+is `forbidden`. The tools' descriptions for those roles leave the owner scope out.
+
 - `owner_memory()`: a new read-only tool answering the active owner entries (with `entry_id`,
   `text`, `last_confirmed_at`), `used_bytes`, `max_bytes` (3072), how many proposals and due
   entries wait for the owner, and a `text` rendering. Listed for every live role, like
@@ -149,7 +158,8 @@ Described here, to be added to `api/openapi.yaml` first when this is built:
   it becomes due; past for a due entry).
 - `POST /owner/memory/{entry_id}/decision` with `{decision}`: `accept` or `reject` (a proposal),
   `keep` (an active entry, which confirms it, or a lapsed one, which makes it active again),
-  `forget` (an active or lapsed entry) and `moved` (an active or lapsed entry). A decision that
+  `forget` (an active or lapsed entry), `moved` (an active or lapsed entry, moved to dotfiles) and
+  `move_to_project` with `project_id` (below). A decision that
   finds the entry already where it would leave it answers it again; any other state is 409, as is
   an accept or keep past the bound. 404 for an entry that is not the owner's.
 - `PUT /owner/memory/settings` with `{review_after_days}` (integer, 1 to 365): the saved setting.
@@ -208,15 +218,27 @@ Settings gets a **Memory** section (`/settings#memory`):
 - **Still true? (N):** due and lapsed entries, oldest confirmation first. A lapsed one is marked
   "Not loaded since <date>". Each has **Keep** and **Forget**.
 - **Active:** every loaded entry with its age ("confirmed 12 days ago"), its source link ("By main,
-  from this turn"), "N of 3,072 bytes used", and **Forget**. Each entry has a **Move to dotfiles**
-  action (below).
+  from this turn"), "N of 3,072 bytes used", and **Forget**. Each entry has **Move to project** and
+  **Move to dotfiles** actions (below). An entry whose text is already in the dotfiles is flagged
+  "Already in your dotfiles" with **Forget** (below).
 - A refused decision shows the server's reason and re-reads the list, as the project Memory section
   does.
 
 **Needs you:** one item for the owner (`source_kind` `owner_memory`, kind `review`), opened while
-any proposal waits or any entry is due or lapsed, with a line such as "2 owner memory proposals and
+any proposal waits, or any entry is due, lapsed or already in the dotfiles, with a line such as "2 owner memory proposals and
 1 entry to review." It is low priority like project memory's: counted, listed last, never pushed.
 It links to `/settings#memory`.
+
+## Moving an entry to a project
+
+Main decides whether a line is owner-wide or one project's, and can guess wrong. **Move to
+project** on an active or lapsed entry asks for one of the owner's projects and, in one
+transaction under the owner's and the project's memory locks, adds the text to that project's
+memory as an active entry and ends the owner entry as `moved`. The new project entry's source
+names the owner entry it came from, and the owner entry records the project entry it became. If
+the project's active memory would pass its 4096 bytes, the move is refused (409 `memory_full`) and
+changes nothing. Both memories take a new sequence number, so running sessions are told of the
+removal and, in that project, of the new entry.
 
 ## Moving an entry to dotfiles
 
@@ -225,6 +247,16 @@ versioned and visible outside Mainloop. **Move to dotfiles** opens the entry's t
 names the configured dotfiles repository, directory and file (`AGENTS.md`), and offers **I've moved
 it**, which sets the entry `moved` and stops loading it. Mainloop never writes to the dotfiles
 repository. With no dotfiles source configured, the action links to the dotfiles setup instead.
+
+**Already in the dotfiles.** Each time Mainloop exports the owner's dotfiles at a new commit
+([agent dotfiles](agent-dotfiles.md)), it checks every active and lapsed owner entry against the
+exported `AGENTS.md`. An entry whose text, folded the same way an entry is (one line, runs of
+whitespace as one space) and compared case-insensitively, appears in that file is flagged with the
+commit it was found at. The match is exact on purpose; a reworded line is not found, and the owner
+uses **Move to dotfiles** for it. A flagged entry still loads, since the duplicate does no harm
+beyond its bytes, and the owner view offers **Forget** for it ("Already in your dotfiles at
+<commit>; forget it here?"). The flag is cleared if a later export no longer contains the text.
+`GET /owner/memory` carries it as `in_dotfiles_commit` (null when not found).
 
 ## Not stored, and why
 
@@ -256,23 +288,36 @@ Server, with Postgres and fakes, no live agents:
 - Needs you: one item, opened by a proposal or a due entry, rewritten as counts change, resolved
   when none is left.
 
+- Workers and workspace agents: `scope: owner` on `remember` and `forget` is `forbidden`; they
+  still get owner memory in their briefs. A supervisor's owner entry is a proposal.
+- Move to project: the project entry is active with its source, the owner entry is `moved`, both
+  sequences move; a full project memory refuses the move and changes nothing.
+- Already in dotfiles: a dotfiles export whose `AGENTS.md` holds an entry's text (whitespace and
+  case aside) flags it with the commit, a reworded line is not flagged, a later export without it
+  clears the flag, and a flagged entry opens the Needs you item.
+
 Web, with mocked API responses: the three lists, each decision, a refused decision, the age and
-source rendering, and Move to dotfiles with and without a dotfiles source.
+source rendering, Move to project (including a refused move), the "Already in your dotfiles" flag,
+and Move to dotfiles with and without a dotfiles source.
 
 Not measured by any of this: whether agents follow owner memory, and whether 14 days is the right
 default. Both need use.
 
+## Decided
+
+Answers the owner gave to this spec's first open questions:
+
+- **One review window** for every entry, the owner's `review_after_days`; no per-entry window and
+  no exemption.
+- **The 7-day grace is fixed**, not a setting.
+- **Only main and supervisors** record owner memory; workers and workspace agents cannot propose.
+- **Move to project** is offered for a line main put in the wrong scope.
+- **An entry already in the dotfiles `AGENTS.md` is flagged**, with an offer to forget it.
+- **3072 bytes** of active owner memory is the bound.
+
 ## Open questions
 
-- **Per-entry windows.** The window is one owner setting. Should an entry carry its own ("until
-  the end of the quarter"), or a long-lived one be exempt until moved to dotfiles?
-- **The grace period.** 7 days after due, fixed. Should it follow the window, or be the owner's
-  setting too?
-- **Workers proposing.** Should workers have the owner scope at all, or only main and supervisors?
-  Workers rarely hear the owner directly; dropping it would cut a source of noisy proposals.
-- **Main's judgement of scope.** Main decides whether a line is owner-wide or one project's. A
-  wrong guess is cheap to fix in the view, but the view could offer **Move to project** too.
-- **Detecting a move.** Mainloop could notice an entry's text in the exported dotfiles `AGENTS.md`
-  and suggest **I've moved it**. Useful, but a fuzzy match; left out for now.
-- **The 3072-byte bound.** Tight on purpose. If the owner keeps hitting `memory_full` with entries
-  they all want, the answer may be moving the oldest to dotfiles rather than a larger bound.
+- **A full memory.** If the owner keeps hitting `memory_full` with entries they all want, should
+  the owner view suggest moving the oldest-confirmed ones to dotfiles?
+- **Move to owner.** The reverse of Move to project: should a project memory entry that turns out
+  to hold everywhere be movable to owner memory from the project page?
