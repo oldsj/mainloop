@@ -161,6 +161,22 @@ spec:
             - name: MAINLOOP_EXECUTOR_UNIFI_DIR
               value: /etc/mainloop-executor/unifi
             {{- end }}
+            {{- if .toolbox.enabled }}
+            {{- if not (regexMatch "^[a-z0-9][a-z0-9./_:-]*@sha256:[a-f0-9]{64}$" (toString .toolbox.image)) }}
+            {{- fail "executor.toolbox.image must be an image reference pinned by digest (name@sha256:...)" }}
+            {{- end }}
+            {{- if or (not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" (toString .toolbox.namespace))) (eq .toolbox.namespace .namespace) (eq .toolbox.namespace $.Release.Namespace) }}
+            {{- fail "executor.toolbox.namespace must be a namespace of its own, not the executor's or the release's" }}
+            {{- end }}
+            - name: MAINLOOP_EXECUTOR_TOOLBOX_ENABLED
+              value: "true"
+            - name: MAINLOOP_EXECUTOR_TOOLBOX_IMAGE
+              value: {{ .toolbox.image | quote }}
+            - name: MAINLOOP_EXECUTOR_TOOLBOX_NAMESPACE
+              value: {{ .toolbox.namespace | quote }}
+            - name: MAINLOOP_EXECUTOR_TOOLBOX_PULL_SECRETS
+              value: {{ join "," .toolbox.imagePullSecrets | quote }}
+            {{- end }}
             # The root filesystem is read-only; /tmp is the only writable path.
             - name: HOME
               value: /tmp
@@ -402,6 +418,98 @@ subjects:
   - kind: ServiceAccount
     name: mainloop-executor
     namespace: {{ $ns }}
+{{- end }}
+{{- if .toolbox.enabled }}
+---
+# command.exec's pods run here, apart from everything else: Pod Security restricted, and no network
+# at all until the deployment's own policy opens what a run of each reach may use.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .toolbox.namespace }}
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+# Nothing runs as this account: the executor mints a short-lived token for it, and its own account
+# may do nothing else with it.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mainloop-executor-toolbox
+  namespace: {{ .namespace }}
+automountServiceAccountToken: false
+---
+# The executor's own account may mint tokens for the toolbox account, and nothing else here. (With
+# executor.kubernetes, its Role mainloop-executor-tokens covers the other accounts; the two are
+# independent.)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mainloop-executor-toolbox-tokens
+  namespace: {{ .namespace }}
+rules:
+  - apiGroups: ['']
+    resources: [serviceaccounts/token]
+    resourceNames: [mainloop-executor-toolbox]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mainloop-executor-toolbox-tokens
+  namespace: {{ .namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mainloop-executor-toolbox-tokens
+subjects:
+  - kind: ServiceAccount
+    name: mainloop-executor
+    namespace: {{ .namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mainloop-executor-toolbox
+  namespace: {{ .toolbox.namespace }}
+rules:
+  - apiGroups: ['']
+    resources: [pods]
+    verbs: [create, get, list, delete]
+  - apiGroups: ['']
+    resources: [pods/log]
+    verbs: [get]
+  # Each run's script and stdin are a Secret named after its pod, deleted with it.
+  - apiGroups: ['']
+    resources: [secrets]
+    verbs: [create, list, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mainloop-executor-toolbox
+  namespace: {{ .toolbox.namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mainloop-executor-toolbox
+subjects:
+  - kind: ServiceAccount
+    name: mainloop-executor-toolbox
+    namespace: {{ .namespace }}
+---
+# Deny by default, both ways. Policies the deployment adds allow what a run of each reach may use.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ .toolbox.namespace }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
 {{- end }}
 {{- end }}
 {{- end }}

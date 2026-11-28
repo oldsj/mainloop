@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -59,7 +60,17 @@ type Executor struct {
 	UniFiAddressText string         `env:"MAINLOOP_EXECUTOR_UNIFI_ADDRESS"`
 	UniFiDir         string         `env:"MAINLOOP_EXECUTOR_UNIFI_DIR" envDefault:"/etc/mainloop-executor/unifi"`
 	UniFiAddress     netip.AddrPort `env:"-"`
+	// Toolbox turns on command.exec: scripts run in pods of ToolboxImage (pinned by digest) in
+	// ToolboxNamespace, through the executor's toolbox account.
+	Toolbox              ExactTrue `env:"MAINLOOP_EXECUTOR_TOOLBOX_ENABLED"`
+	ToolboxImage         string    `env:"MAINLOOP_EXECUTOR_TOOLBOX_IMAGE"`
+	ToolboxNamespace     string    `env:"MAINLOOP_EXECUTOR_TOOLBOX_NAMESPACE" envDefault:"mainloop-toolbox"`
+	ToolboxPullSecrets   string    `env:"MAINLOOP_EXECUTOR_TOOLBOX_PULL_SECRETS"`
+	ToolboxPullSecretSet []string  `env:"-"`
 }
+
+// toolboxImageRE is an image reference pinned by digest.
+var toolboxImageRE = regexp.MustCompile(`^[a-z0-9][a-z0-9./_:-]*@sha256:[a-f0-9]{64}$`)
 
 // LoadExecutor reads and validates serve-executor's settings from the process environment.
 func LoadExecutor() (*Executor, error) {
@@ -134,6 +145,28 @@ func ParseExecutor(vars map[string]string) (*Executor, error) {
 		e.UniFiAddress = ap
 		if !filepath.IsAbs(e.UniFiDir) {
 			errs = append(errs, errors.New("MAINLOOP_EXECUTOR_UNIFI_DIR must be an absolute path"))
+		}
+	}
+	if e.Toolbox {
+		e.ToolboxImage, e.ToolboxNamespace = strings.TrimSpace(e.ToolboxImage), strings.TrimSpace(e.ToolboxNamespace)
+		if !dnsLabel.MatchString(e.Namespace) {
+			errs = append(errs, errors.New("MAINLOOP_EXECUTOR_NAMESPACE must be the executor's namespace when MAINLOOP_EXECUTOR_TOOLBOX_ENABLED is true"))
+		}
+		if len(e.ToolboxImage) > 300 || !toolboxImageRE.MatchString(e.ToolboxImage) {
+			errs = append(errs, errors.New("MAINLOOP_EXECUTOR_TOOLBOX_IMAGE must be an image reference pinned by digest (name@sha256:...) when MAINLOOP_EXECUTOR_TOOLBOX_ENABLED is true"))
+		}
+		if !dnsLabel.MatchString(e.ToolboxNamespace) || e.ToolboxNamespace == e.Namespace {
+			errs = append(errs, errors.New("MAINLOOP_EXECUTOR_TOOLBOX_NAMESPACE must be a namespace other than the executor's"))
+		}
+		for _, s := range strings.Split(e.ToolboxPullSecrets, ",") {
+			if s = strings.TrimSpace(s); s == "" {
+				continue
+			}
+			if !dnsLabel.MatchString(s) {
+				errs = append(errs, fmt.Errorf("MAINLOOP_EXECUTOR_TOOLBOX_PULL_SECRETS: %q is not a Secret name", s))
+				continue
+			}
+			e.ToolboxPullSecretSet = append(e.ToolboxPullSecretSet, s)
 		}
 	}
 	if err := errors.Join(errs...); err != nil {

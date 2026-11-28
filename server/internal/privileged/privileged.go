@@ -224,6 +224,13 @@ type Service struct {
 	UniFiOn bool
 	// UniFi reaches the UniFi console; nil without UniFi access.
 	UniFi UniFi
+	// ToolboxOn, in serve-api, accepts command.exec: the executor runs scripts in the toolbox.
+	ToolboxOn bool
+	// Toolbox makes and reads the toolbox pods; nil without a toolbox.
+	Toolbox Toolbox
+	// ToolboxImage is the toolbox image, pinned by digest: what a run's pod uses, and what its
+	// card froze.
+	ToolboxImage string
 }
 
 func (s *Service) now() time.Time {
@@ -257,6 +264,8 @@ func (s *Service) Request(ctx context.Context, by Requester, typ string, rawArgs
 		return Action{}, fmt.Errorf("%w: %s needs Omni access for Mainloop's executor, which this Mainloop does not have", ErrUnsupported, typ)
 	case entry.ssh && !s.SSHOn:
 		return Action{}, fmt.Errorf("%w: %s needs ssh access for Mainloop's executor, which this Mainloop does not have", ErrUnsupported, typ)
+	case entry.toolbox && !s.ToolboxOn:
+		return Action{}, fmt.Errorf("%w: %s needs a toolbox for Mainloop's executor, which this Mainloop does not have", ErrUnsupported, typ)
 	case entry.unifi && !s.UniFiOn:
 		return Action{}, fmt.Errorf("%w: %s needs UniFi access for Mainloop's executor, which this Mainloop does not have", ErrUnsupported, typ)
 	case !entry.executor && s.GitHub == nil:

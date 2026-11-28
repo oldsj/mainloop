@@ -17,9 +17,10 @@ import (
 const ApprovalMaxAge = 15 * time.Minute
 
 // ApprovalRetryWindow is how long after its first use an approval can still be retried: every
-// attempt under its longest deadline (a command's longest timeout on top of the remote calls'),
+// attempt under its longest deadline (a command's longest timeout, and a toolbox pod's start, on top
+// of the remote calls'),
 // the delays between them, and one lease's expiry after a crash.
-const ApprovalRetryWindow = MaxAttempts*(RemoteTimeout+MaxCommandTimeout+retryDelay) + execLease
+const ApprovalRetryWindow = MaxAttempts*(RemoteTimeout+MaxCommandTimeout+toolboxPendingLimit+retryDelay) + execLease
 
 // ApprovalMaxUse bounds every use of an approval, first or retry, from the time the owner signed
 // it. It is measured from the token's signed iat, which serve-api can't change, not from the

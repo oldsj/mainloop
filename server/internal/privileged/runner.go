@@ -46,6 +46,12 @@ type Sender interface {
 type Runner struct {
 	*Service
 	Sender Sender
+	// ToolboxPoll is how often a command.exec run's pod is read while it runs; 2 s when zero.
+	ToolboxPoll time.Duration
+	// ToolboxReap is how often the executor deletes the pods of finished actions; 30 s when zero,
+	// every pass when negative.
+	ToolboxReap time.Duration
+	reapedAt    time.Time
 }
 
 // Sweep runs the runner every few seconds.
@@ -60,7 +66,10 @@ func (r *Runner) Run(ctx context.Context) error {
 		if err := r.preflightStuck(ctx); err != nil {
 			return err
 		}
-		return r.execute(ctx)
+		if err := r.execute(ctx); err != nil {
+			return err
+		}
+		return r.reapToolbox(ctx)
 	}
 	for _, step := range []func(context.Context) error{
 		r.preflightStuck, r.openCards, r.failUnpicked, r.decide, r.expire, r.execute, r.raiseUncertain,
@@ -331,6 +340,11 @@ func (r *Runner) run(ctx context.Context, row dbq.PrivilegedAction) outcome {
 		}
 	case TypeUniFi:
 		limit += unifiTimeout // the certificate, the object again, then the request
+	case TypeExec:
+		var a ExecArgs
+		if json.Unmarshal(row.Args, &a) == nil {
+			limit += a.timeout() + toolboxPendingLimit // the pod's start, then the script under its own deadline
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
@@ -357,6 +371,8 @@ func (r *Runner) run(ctx context.Context, row dbq.PrivilegedAction) outcome {
 		return r.ssh(ctx, row)
 	case TypeUniFi:
 		return r.unifi(ctx, row)
+	case TypeExec:
+		return r.exec(ctx, row)
 	default:
 		return outcome{state: StateFailed, err: "the type is no longer in the catalog"}
 	}

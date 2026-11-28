@@ -63,6 +63,8 @@ type entry struct {
 	ssh bool
 	// unifi types need the executor's UniFi access (executor.unifi in the chart).
 	unifi bool
+	// toolbox types need the executor's toolbox (executor.toolbox in the chart).
+	toolbox bool
 	// how is the card's line on what Approve does and through which credential.
 	how string
 	// normalize validates raw arguments and returns their canonical value.
@@ -135,6 +137,12 @@ var catalog = map[string]entry{
 		how: "Approve runs exactly this command once on the host, over ssh, as its admin user with the executor's key for that host. " +
 			"Nothing previews it, and nothing on the executor's side limits what the remote shell does with it.",
 		normalize: normalizeSSH, facts: SSHFacts{}, preflight: preflightSSH,
+	},
+	TypeExec: {
+		version: 1, expiry: UndecidedExpiry, expiryFor: execExpiry, executor: true, toolbox: true,
+		how: "Approve runs exactly this script once, in a fresh single-use pod of the toolbox image that holds none of Mainloop's credentials " +
+			"and reaches the internet only. Nothing previews it, and nothing limits what the script does inside the pod.",
+		normalize: normalizeExec, facts: ExecFacts{}, preflight: preflightExec,
 	},
 }
 

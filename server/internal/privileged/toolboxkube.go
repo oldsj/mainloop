@@ -1,0 +1,336 @@
+package privileged
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"strconv"
+	"sync"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+)
+
+// AccountToolbox is the executor's ServiceAccount for command.exec. Nothing runs as it: the
+// executor mints a token for it and makes pods, and reads and deletes them, in the toolbox
+// namespace only (the chart's Role).
+const AccountToolbox = "mainloop-executor-toolbox"
+
+// DefaultToolboxNamespace is where command.exec's pods run: a namespace of their own, with Pod
+// Security restricted and a default-deny network policy (the chart).
+const DefaultToolboxNamespace = "mainloop-toolbox"
+
+// Labels on a run's pod and Secret.
+const (
+	labelToolbox  = "app.kubernetes.io/name"
+	labelToolboxV = "mainloop-toolbox"
+	labelAction   = "mainloop.dev/privileged-action"
+	labelReach    = "mainloop.dev/reach"
+)
+
+const (
+	toolboxContainer = "run"
+	toolboxUID       = 65532
+	// scriptDir holds the run's script and stdin, from the run's Secret.
+	scriptDir = "/run/exec"
+	// toolboxGrace is what a pod's deadline allows beyond the script's timeout: the image's pull
+	// counts against it, and so do the 5 seconds between the script's TERM and KILL.
+	toolboxGrace = toolboxPendingLimit + time.Minute
+)
+
+// KubeToolbox runs the toolbox pods through the Kubernetes API with the executor's toolbox
+// account. Clients mints that account's token, refreshed before it expires; Client, if set,
+// replaces it (tests).
+type KubeToolbox struct {
+	Clients   KubeClients
+	Namespace string
+	// PullSecrets name Secrets in Namespace that the image's registry needs.
+	PullSecrets []string
+	Client      kubernetes.Interface
+
+	mu      sync.Mutex
+	minted  kubernetes.Interface
+	expires time.Time
+}
+
+const toolboxTokenLife = 20 * time.Minute
+
+// client returns a client for the toolbox account, minted again when under five minutes remain.
+func (k *KubeToolbox) client(ctx context.Context) (kubernetes.Interface, error) {
+	if k.Client != nil {
+		return k.Client, nil
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.minted != nil && time.Until(k.expires) > 5*time.Minute {
+		return k.minted, nil
+	}
+	cfg, err := k.Clients.ConfigFor(ctx, AccountToolbox, toolboxTokenLife)
+	if err != nil {
+		return nil, err
+	}
+	c, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("toolbox client: %w", err)
+	}
+	k.minted, k.expires = c, time.Now().Add(toolboxTokenLife)
+	return c, nil
+}
+
+func (k *KubeToolbox) ns() string {
+	if k.Namespace == "" {
+		return DefaultToolboxNamespace
+	}
+	return k.Namespace
+}
+
+// Ready lists pods, which needs the account, the namespace and its Role.
+func (k *KubeToolbox) Ready(ctx context.Context) error {
+	c, err := k.client(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = c.CoreV1().Pods(k.ns()).List(ctx, metav1.ListOptions{Limit: 1, LabelSelector: labelToolbox + "=" + labelToolboxV})
+	switch {
+	case apierrors.IsForbidden(err), apierrors.IsNotFound(err), apierrors.IsUnauthorized(err):
+		return refuse("the toolbox is not ready: its namespace %s or the executor's access to it is missing", k.ns())
+	}
+	return err
+}
+
+func runLabels(actionID, reach string) map[string]string {
+	return map[string]string{labelToolbox: labelToolboxV, labelAction: actionID, labelReach: reach}
+}
+
+// Create makes the run's Secret and pod. Both are named after the action, so creating them again
+// finds the same run.
+func (k *KubeToolbox) Create(ctx context.Context, spec ToolboxSpec) error {
+	c, err := k.client(ctx)
+	if err != nil {
+		return err
+	}
+	name := execPodName(spec.ActionID)
+	labels := runLabels(spec.ActionID, spec.Reach)
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: k.ns(), Labels: labels},
+		Type:       corev1.SecretTypeOpaque,
+		Data:       map[string][]byte{"script": []byte(spec.Script), "stdin": []byte(spec.Stdin)},
+	}
+	if _, err := c.CoreV1().Secrets(k.ns()).Create(ctx, secret, metav1.CreateOptions{FieldManager: FieldManager}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return created(err)
+	}
+	if _, err := c.CoreV1().Pods(k.ns()).Create(ctx, k.pod(name, labels, spec), metav1.CreateOptions{FieldManager: FieldManager}); err != nil && !apierrors.IsAlreadyExists(err) {
+		err = created(err)
+		var before *NothingRan
+		if errors.As(err, &before) {
+			_ = c.CoreV1().Secrets(k.ns()).Delete(ctx, name, metav1.DeleteOptions{}) // no pod will read it
+		}
+		return err
+	}
+	return nil
+}
+
+// created classifies a create's error: an answer from the API server that refuses the object means
+// nothing was made; any other error (a lost connection) may have left it made.
+func created(err error) error {
+	var s apierrors.APIStatus
+	if errors.As(err, &s) && s.Status().Code >= 400 && s.Status().Code < 500 && s.Status().Code != 408 && s.Status().Code != 429 {
+		return &NothingRan{Err: fmt.Errorf("the API server refused the toolbox pod (%s)", apierrors.ReasonForError(err))}
+	}
+	return err
+}
+
+// pod is the run's pod: restricted, with no credential, a read-only root, and the script mounted
+// from the run's Secret. Its own deadline outlasts the script's timeout by the image's pull and
+// the kill grace.
+func (k *KubeToolbox) pod(name string, labels map[string]string, spec ToolboxSpec) *corev1.Pod {
+	f, t := false, true
+	deadline := int64((spec.Timeout + toolboxGrace).Seconds())
+	uid := int64(toolboxUID)
+	secs := strconv.Itoa(int(spec.Timeout.Seconds()))
+	var pull []corev1.LocalObjectReference
+	for _, s := range k.PullSecrets {
+		pull = append(pull, corev1.LocalObjectReference{Name: s})
+	}
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: k.ns(), Labels: labels},
+		Spec: corev1.PodSpec{
+			RestartPolicy:         corev1.RestartPolicyNever,
+			ActiveDeadlineSeconds: &deadline,
+			// No ServiceAccount token, no service links: the run holds no Kubernetes credential.
+			AutomountServiceAccountToken: &f,
+			EnableServiceLinks:           &f,
+			ImagePullSecrets:             pull,
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsNonRoot: &t, RunAsUser: &uid, RunAsGroup: &uid,
+				SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+				// ping works without NET_RAW through unprivileged ICMP sockets.
+				Sysctls: []corev1.Sysctl{{Name: "net.ipv4.ping_group_range", Value: "0 2147483647"}},
+			},
+			Containers: []corev1.Container{{
+				Name: toolboxContainer, Image: spec.Image, ImagePullPolicy: corev1.PullIfNotPresent,
+				// The deadline is the container's own: timeout stops the script, and its exit 124
+				// tells the executor it ran out. The script is a file, never a command line.
+				Command: []string{"bash", "-c", `exec timeout -k 5 "$1" bash -euo pipefail ` + scriptDir + `/script <` + scriptDir + `/stdin`, "toolbox", secs},
+				Env:     []corev1.EnvVar{{Name: "HOME", Value: "/work"}},
+				SecurityContext: &corev1.SecurityContext{
+					AllowPrivilegeEscalation: &f, ReadOnlyRootFilesystem: &t, RunAsNonRoot: &t, RunAsUser: &uid, RunAsGroup: &uid,
+					Capabilities:   &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+					SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+				},
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("256Mi")},
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU: resource.MustParse("1"), corev1.ResourceMemory: resource.MustParse("2Gi"),
+						corev1.ResourceEphemeralStorage: resource.MustParse("2Gi"),
+					},
+				},
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: "work", MountPath: "/work"},
+					{Name: "tmp", MountPath: "/tmp"},
+					{Name: "exec", MountPath: scriptDir, ReadOnly: true},
+				},
+			}},
+			Volumes: []corev1.Volume{
+				{Name: "work", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: resource.NewQuantity(1<<30, resource.BinarySI)}}},
+				{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: resource.NewQuantity(256<<20, resource.BinarySI)}}},
+				{Name: "exec", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: name, DefaultMode: new(int32(0o444))}}},
+			},
+		},
+	}
+}
+
+// State reads the run's pod and maps it: a container that has not started means nothing ran.
+func (k *KubeToolbox) State(ctx context.Context, actionID string) (ToolboxState, error) {
+	c, err := k.client(ctx)
+	if err != nil {
+		return ToolboxState{}, err
+	}
+	p, err := c.CoreV1().Pods(k.ns()).Get(ctx, execPodName(actionID), metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return ToolboxState{}, nil
+	}
+	if err != nil {
+		return ToolboxState{}, err
+	}
+	return podState(p), nil
+}
+
+func podState(p *corev1.Pod) ToolboxState {
+	st := ToolboxState{Exists: true, Phase: ToolboxPending, Reason: string(p.Status.Phase)}
+	var cs *corev1.ContainerStatus
+	for i := range p.Status.ContainerStatuses {
+		if p.Status.ContainerStatuses[i].Name == toolboxContainer {
+			cs = &p.Status.ContainerStatuses[i]
+		}
+	}
+	switch {
+	case cs != nil && cs.State.Terminated != nil:
+		t := cs.State.Terminated
+		// A container that terminated without ever starting could not be created: nothing ran.
+		st.Started = !t.StartedAt.IsZero()
+		st.Phase, st.ExitCode, st.Reason = ToolboxExited, int(t.ExitCode), t.Reason
+		if st.Reason == "" {
+			st.Reason = "Completed"
+		}
+		if !st.Started {
+			st.Phase = ToolboxFailed
+		}
+		if p.Status.Reason == "DeadlineExceeded" {
+			st.Reason = p.Status.Reason // the pod's deadline killed it
+		}
+	case p.Status.Phase == corev1.PodFailed || p.Status.Phase == corev1.PodSucceeded:
+		st.Phase = ToolboxFailed
+		st.Started = cs != nil && cs.Started != nil && *cs.Started
+		if p.Status.Reason != "" {
+			st.Reason = p.Status.Reason
+		}
+	case cs != nil && cs.State.Running != nil:
+		st.Phase, st.Started = ToolboxRunning, true
+	case cs != nil && cs.State.Waiting != nil:
+		st.Reason, st.Message = cs.State.Waiting.Reason, cs.State.Waiting.Message
+	}
+	return st
+}
+
+// Output reads the pod's log: stdout and stderr together, at most max bytes.
+func (k *KubeToolbox) Output(ctx context.Context, actionID string, max int) ([]byte, error) {
+	c, err := k.client(ctx)
+	if err != nil {
+		return nil, err
+	}
+	lim := int64(max)
+	rc, err := c.CoreV1().Pods(k.ns()).GetLogs(execPodName(actionID), &corev1.PodLogOptions{Container: toolboxContainer, LimitBytes: &lim}).Stream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rc.Close() }()
+	return io.ReadAll(io.LimitReader(rc, lim))
+}
+
+// Delete removes the run's pod and Secret.
+func (k *KubeToolbox) Delete(ctx context.Context, actionID string) error {
+	c, err := k.client(ctx)
+	if err != nil {
+		return err
+	}
+	name := execPodName(actionID)
+	grace := int64(0)
+	if err := c.CoreV1().Pods(k.ns()).Delete(ctx, name, metav1.DeleteOptions{GracePeriodSeconds: &grace}); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	if err := c.CoreV1().Secrets(k.ns()).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+// Runs lists the runs that have a pod or a Secret.
+func (k *KubeToolbox) Runs(ctx context.Context) ([]ToolboxRef, error) {
+	c, err := k.client(ctx)
+	if err != nil {
+		return nil, err
+	}
+	opts := metav1.ListOptions{LabelSelector: labelToolbox + "=" + labelToolboxV}
+	pods, err := c.CoreV1().Pods(k.ns()).List(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	secrets, err := c.CoreV1().Secrets(k.ns()).List(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]int{}
+	var out []ToolboxRef
+	add := func(l map[string]string, at time.Time) {
+		id := l[labelAction]
+		if id == "" {
+			return
+		}
+		if i, ok := seen[id]; ok {
+			out[i].CreatedAt = minTime(out[i].CreatedAt, at)
+			return
+		}
+		seen[id] = len(out)
+		out = append(out, ToolboxRef{ActionID: id, CreatedAt: at})
+	}
+	for _, p := range pods.Items {
+		add(p.Labels, p.CreationTimestamp.Time)
+	}
+	for _, s := range secrets.Items {
+		add(s.Labels, s.CreationTimestamp.Time)
+	}
+	return out, nil
+}
+
+func minTime(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
+}

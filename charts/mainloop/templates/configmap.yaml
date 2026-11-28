@@ -29,6 +29,9 @@ data:
   {{- if .Values.executor.unifi.enabled }}
   {{- $_ := set $data "MAINLOOP_PRIVILEGED_EXECUTOR_UNIFI_ENABLED" "true" }}
   {{- end }}
+  {{- if .Values.executor.toolbox.enabled }}
+  {{- $_ := set $data "MAINLOOP_PRIVILEGED_EXECUTOR_TOOLBOX_ENABLED" "true" }}
+  {{- end }}
   {{- end }}
   {{- if and .Values.screenshots.enabled (not (hasKey $data "MAINLOOP_SCREENSHOT_BROWSER_URL")) }}
   {{- $_ := set $data "MAINLOOP_SCREENSHOT_BROWSER_URL" (printf "http://mainloop-screenshots.%s.svc.cluster.local:9222" .Release.Namespace) }}

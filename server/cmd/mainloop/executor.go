@@ -86,8 +86,14 @@ func serveExecutor(ctx context.Context, log *slog.Logger) error {
 	if cfg.UniFi {
 		svc.UniFi = privileged.ExecUniFi{Address: cfg.UniFiAddress, Dir: cfg.UniFiDir}
 	}
+	if cfg.Toolbox {
+		clients := privileged.KubeClients{Client: kube, Base: kc, Namespace: cfg.Namespace}
+		svc.Toolbox = &privileged.KubeToolbox{Clients: clients, Namespace: cfg.ToolboxNamespace, PullSecrets: cfg.ToolboxPullSecretSet}
+		svc.ToolboxImage = cfg.ToolboxImage
+	}
 	r := &privileged.Runner{Service: svc}
 	log.Info("executor ready", "types", privileged.TypesFor(true), "secret_namespaces", cfg.SecretNamespaces,
+		"toolbox", bool(cfg.Toolbox), "toolbox_image", cfg.ToolboxImage,
 		"kubernetes", bool(cfg.Kubernetes), "namespace", cfg.Namespace, "omni", bool(cfg.Omni), "omni_clusters", cfg.OmniClusters,
 		"ssh_hosts", svc.SSHHosts, "unifi", bool(cfg.UniFi),
 		"pinned_approval_keys", len(svc.ApprovalKeys), "approvals_mode", string(cfg.ApprovalsMode))

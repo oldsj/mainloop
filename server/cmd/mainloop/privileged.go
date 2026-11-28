@@ -27,6 +27,7 @@ func newPrivileged(cfg *config.Config, pool *pgxpool.Pool, gh *github.App, log *
 		OmniOn:       bool(cfg.PrivilegedExecutorEnabled) && bool(cfg.PrivilegedOmniEnabled),
 		SSHOn:        bool(cfg.PrivilegedExecutorEnabled) && bool(cfg.PrivilegedSSHEnabled),
 		UniFiOn:      bool(cfg.PrivilegedExecutorEnabled) && bool(cfg.PrivilegedUniFiEnabled),
+		ToolboxOn:    bool(cfg.PrivilegedExecutorEnabled) && bool(cfg.PrivilegedToolboxEnabled),
 	}
 }
 

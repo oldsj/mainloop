@@ -96,6 +96,18 @@ func (s *Server) privilegedTools() []Tool {
 			"preview. Name one object: a path a GET cannot read is refused. A DELETE, or a command naming a delete, forget or reset, " +
 			"is tagged destructive and expires in an hour; an upgrade is tagged as installing software. The answer (status and " +
 			"body, secret fields redacted) comes back as the result. It answers unavailable where the executor has no UniFi access. " +
+			"command.exec {target (toolbox, the only one), script (a bash script, run as bash -euo pipefail; at most 64 KiB), stdin (64 KiB), " +
+			"reach (internet, the only one so far), timeout_seconds (default 60, at most 600)} runs that script once in a fresh, " +
+			"single-use pod of the toolbox image, for what no typed action covers: a CLI that is not kubectl (helm, crane, gh, " +
+			"curl, dig, ping, jq, yq, psql, python3, node, uv and others at pinned versions), a script that chains tools, a download " +
+			"or a check from outside. The pod holds no credential: no Kubernetes token, no Mainloop secret, and no secret of yours " +
+			"unless the script carries one (a credential in script or stdin is refused, contains_secret). With internet reach it " +
+			"can reach DNS and public addresses and nothing inside the network: the cluster, the home network and Mainloop are " +
+			"unreachable. It has a read-only root, 1 CPU, 2 GiB and a 1 GiB /work. The card shows the script and stdin in full, " +
+			"the image's digest and the reach, with a tag when a word scan sees a delete (the card then expires in an hour) or an " +
+			"install; nothing can preview it. You get the exit code and the output (stdout and stderr together, redacted, 64 KiB). " +
+			"A script that ran past its timeout or whose outcome was lost is uncertain, never run again. It answers unavailable " +
+			"where the executor has no toolbox. " +
 			"An executor type returns state requested; its card opens once the executor has checked the target. Reuse request_id to read the same request back. At most 3 requests per session " +
 			"and 10 in all wait for the owner.",
 		InputSchema: objectSchema(map[string]any{
