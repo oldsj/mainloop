@@ -76,6 +76,10 @@ type Exports struct {
 	// Zero means 10 seconds.
 	ReadTimeout time.Duration
 	Log         *slog.Logger
+	// OwnerExported, when set, is told of each ready pin of an owner's own source: the owner, the
+	// commit and that commit's AGENTS.md (nil when it has none). Owner memory checks its entries
+	// against it (docs/specs/owner-memory.md#moving-an-entry-to-dotfiles).
+	OwnerExported func(ctx context.Context, ownerID, commit string, agentsMD []byte) error
 
 	heads headCache
 }

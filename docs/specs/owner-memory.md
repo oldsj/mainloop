@@ -1,7 +1,7 @@
 # Owner memory
 
-Status: **proposed**, not implemented. Nothing here is in `api/openapi.yaml`, `api/mcp-tools.json`
-or the server yet. It extends [project memory](project-context.md#project-memory), which is
+Status: **implemented** (server: `server/internal/ownermemory`, the `remember`, `forget` and
+`owner_memory` tools, `/owner/memory`; web: Settings → Memory). Live use is not measured. It extends [project memory](project-context.md#project-memory), which is
 implemented, with an owner scope; where this spec is silent, owner memory behaves as project memory
 does.
 
@@ -149,7 +149,7 @@ bump).
 
 ## API
 
-Described here, to be added to `api/openapi.yaml` first when this is built:
+In `api/openapi.yaml` (tag `owner-memory`):
 
 - `GET /owner/memory`: the active entries, then the lapsed ones, then the proposals, each oldest
   first, with `used_bytes`, `max_bytes` (3072), `max_entry_bytes` (500), `review_after_days` (the owner's
@@ -181,14 +181,20 @@ agents, Claude and Codex alike.
   on the attempt
   (`task_attempts.owner_memory_seq`) before the brief is first sent, like `memory_seq`.
 - **The main session:** in the context block of its first message, after the role line and the
-  shared guidance ([chat](chat.md)). The main binding records the owner memory sequence it was
-  given, as it records the guidance version.
+  shared guidance ([chat](chat.md)). The delivery that carries the block records the owner memory
+  sequence it gave (`deliveries.given_owner_memory_seq`); the binding has no column of its own.
 - **Running sessions:** a session given an older sequence gets the changes in front of its next
   Mainloop-delivered message, never mid-turn and only once, as project memory's changes are
   ([running sessions](project-context.md#running-sessions)). For a task it is an `## Owner memory
-changes` part of the same `[mainloop:project-context]` block (renamed `[mainloop:context]`
-  when built); for main it rides the context block. What a session has is recorded on the delivery
-  (`deliveries.given_owner_memory_seq`). The block's 2 KiB cap is shared.
+changes` part of the `[mainloop:context]` block (formerly `[mainloop:project-context]`); main
+  gets the same block in front of a later message, and the whole section inside its context block
+  when that is rendered again. A session that was given no owner memory gets the whole
+  `## Owner memory` section in the block instead of the changes. What a session has is recorded on the delivery
+  (`deliveries.given_owner_memory_seq`). The block's 2 KiB cap is shared: owner memory gets what the
+  project part leaves, lists removals before new entries, and brings the session only to the newest
+  sequence whose changes fit whole, so the recorded sequence is always one the session was told all
+  of. The rest goes with the next message, and the block ends with the cut note. Each change to the
+  set (a lapse included, one entry at a time) takes its own sequence, so one change always fits.
 
 Rendered as:
 
@@ -236,7 +242,8 @@ project** on an active or lapsed entry asks for one of the owner's projects and,
 transaction under the owner's and the project's memory locks, adds the text to that project's
 memory as an active entry and ends the owner entry as `moved`. The new project entry's source
 names the owner entry it came from, and the owner entry records the project entry it became. If
-the project's active memory would pass its 4096 bytes, the move is refused (409 `memory_full`) and
+the project already has an open entry with the same text, the move answers it instead of adding
+a second copy: an active one as it is, a proposal accepted as the moved entry. If the project's active memory would pass its 4096 bytes, the move is refused (409 `memory_full`) and
 changes nothing. Both memories take a new sequence number, so running sessions are told of the
 removal and, in that project, of the new entry.
 

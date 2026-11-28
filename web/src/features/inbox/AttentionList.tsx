@@ -344,13 +344,18 @@ function TaskEntry({ view, action }: { view: TaskView; action: string }) {
   );
 }
 
+/** Where the owner memory review item links: Settings → Memory. */
+const OWNER_MEMORY_HREF = '/settings#memory';
+
 /**
  * A bare item, with no live request or queue question to render as its own card: `item.needed` is
  * the one-line ask (an owner decision's `owner_action`, or a problem's plain-language explanation),
  * followed by the one action available for it. A problem has nothing to decide, so it only offers
  * to review the evidence; an owner decision says so, so the link reads as the next step the ask
- * calls for. A review (project memory proposals) is decided on its project page.
+ * calls for. A review is decided where its entries are: project memory on its project page, owner
+ * memory in Settings.
  */
+
 function AttentionEntry({ item }: { item: AttentionItem }) {
   const queue = item.queue_item;
 
@@ -384,6 +389,14 @@ function AttentionEntry({ item }: { item: AttentionItem }) {
           className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'self-start')}
         >
           {item.kind === 'review' ? 'Review on the project page' : 'Open the project'}
+        </Link>
+      ) : item.href === OWNER_MEMORY_HREF ? (
+        <Link
+          to="/settings"
+          hash="memory"
+          className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'self-start')}
+        >
+          Review in Settings
         </Link>
       ) : item.href?.startsWith('/sessions/') ? (
         <Link

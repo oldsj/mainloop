@@ -26,6 +26,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/hitl"
 	"github.com/oldsj/mainloop/server/internal/httpx"
 	"github.com/oldsj/mainloop/server/internal/merge"
+	"github.com/oldsj/mainloop/server/internal/ownermemory"
 	"github.com/oldsj/mainloop/server/internal/preview"
 	"github.com/oldsj/mainloop/server/internal/privileged"
 	"github.com/oldsj/mainloop/server/internal/projects"
@@ -69,6 +70,7 @@ type Server struct {
 	*preview.GrantAPI
 	*privileged.PrivilegedAPI
 	*devices.DevicesAPI
+	*ownermemory.OwnerMemoryAPI
 
 	fallback
 
@@ -199,6 +201,7 @@ func New(d Deps) *Server {
 		GrantAPI:        &preview.GrantAPI{Proxy: d.Preview, AuthOff: d.Auth == nil || d.Auth.Mode == auth.ModeOff},
 		PrivilegedAPI:   &privileged.PrivilegedAPI{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID},
 		DevicesAPI:      devicesAPI,
+		OwnerMemoryAPI:  &ownermemory.OwnerMemoryAPI{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID},
 		deps:            d,
 	}
 }

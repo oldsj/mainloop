@@ -16,11 +16,11 @@ SELECT count(*) FROM project_memory_entries WHERE project_id = $1 AND state = 'p
 -- name: InsertProjectMemoryEntry :one
 INSERT INTO project_memory_entries (
     id, project_id, text, state, author, source_session_id, source_task_id, source_attempt_id,
-    source_delivery_id, replaces_id, activated_seq, decided_at
+    source_delivery_id, source_owner_entry_id, replaces_id, activated_seq, decided_at
 ) VALUES (
     sqlc.arg(id), sqlc.arg(project_id), sqlc.arg(text), sqlc.arg(state), sqlc.arg(author),
     sqlc.narg(source_session_id), sqlc.narg(source_task_id), sqlc.narg(source_attempt_id),
-    sqlc.narg(source_delivery_id), sqlc.narg(replaces_id), sqlc.narg(activated_seq),
+    sqlc.narg(source_delivery_id), sqlc.narg(source_owner_entry_id), sqlc.narg(replaces_id), sqlc.narg(activated_seq),
     CASE WHEN sqlc.arg(state)::text = 'active' THEN now() END
 ) RETURNING *;
 

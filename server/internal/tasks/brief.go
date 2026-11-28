@@ -8,14 +8,17 @@ import (
 	"github.com/oldsj/mainloop/server/internal/agentcontext"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/ownermemory"
 	"github.com/oldsj/mainloop/server/internal/projectcontext"
 )
 
 // DelegatedBrief is the first message a task's agent receives: the role and tool guidance, then
-// the brief as the delegator wrote it, then the project's instructions section (project, "" when
-// it has none), then the shared guidance for working in Mainloop. The stored brief is not
-// changed; this is only what reaches the agent.
-func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief, project string) string {
+// the brief as the delegator wrote it, then the owner's memory section (owner, "" when there is
+// none), then the project's instructions and memory sections (project, "" when it has none), then
+// the shared guidance for working in Mainloop. It reads from owner-wide to project-specific, so
+// the more specific section comes later. The stored brief is not changed; this is only what
+// reaches the agent.
+func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief, owner, project string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are the Mainloop task %s. First call `whoami`, then `task_get` with its task_id.", role)
 	if mode == dbstate.TaskModeCode {
@@ -33,6 +36,10 @@ func DelegatedBrief(role dbstate.AttemptRole, mode dbstate.TaskMode, brief, proj
 	b.WriteString("\n\n## Assigned work\n")
 	b.WriteString(brief)
 	b.WriteString("\n\n")
+	if owner != "" {
+		b.WriteString(owner)
+		b.WriteString("\n")
+	}
 	if project != "" {
 		b.WriteString(project)
 		b.WriteString("\n")
@@ -57,11 +64,16 @@ const StandingGuidance = "## Standing supervisor\n" +
 	"the next message wakes you. Report `blocked`, never `failed`.\n" +
 	"- Hand code to workers (`delegate` mode `code`) and manage them with the task tools; arm a loop or end your turn rather than poll.\n"
 
-// attemptBrief renders the brief an attempt's agent receives. A task with a project carries the
-// project's instructions and active memory as of the version and memory sequence pinned on the
-// attempt by its first render, so a resend of the brief carries the same text. A retry's or
+// attemptBrief renders the brief an attempt's agent receives. Every task carries the owner's active
+// memory as of the owner memory sequence pinned on the attempt by its first render; a task with a
+// project also carries the project's instructions and active memory as of the version and memory
+// sequence pinned the same way, so a resend of the brief carries the same text. A retry's or
 // reassign's attempt also gets a continuation note after the brief; see [continuation].
 func attemptBrief(ctx context.Context, q *dbq.Queries, a dbq.TaskAttempt, t dbq.Task) (string, error) {
+	lines, err := ownermemory.ForAttempt(ctx, q, a.ID, t.OwnerID)
+	if err != nil {
+		return "", err
+	}
 	project := ""
 	if t.ProjectID != nil {
 		in, err := projectcontext.ForAttempt(ctx, q, a.ID, *t.ProjectID)
@@ -89,5 +101,5 @@ func attemptBrief(ctx context.Context, q *dbq.Queries, a dbq.TaskAttempt, t dbq.
 	} else if note != "" {
 		brief += "\n\n" + note
 	}
-	return DelegatedBrief(a.Role, t.Mode, brief, project), nil
+	return DelegatedBrief(a.Role, t.Mode, brief, ownermemory.Section(lines), project), nil
 }

@@ -8,8 +8,8 @@ import (
 	"github.com/oldsj/mainloop/server/internal/projectcontext"
 )
 
-const header = projectcontext.UpdateMarker + " This project's context changed since your brief. " +
-	"Where they differ, this replaces what your brief said.\n"
+const header = projectcontext.UpdateMarker + " Your context changed since you were given it. " +
+	"Where they differ, this replaces what you were given.\n"
 
 func instr(v int, text string) projectcontext.Instructions {
 	return projectcontext.Instructions{ProjectID: "p1", Version: v, Text: text}
@@ -58,7 +58,7 @@ func TestAnUpdateSendsOnlyWhatChanged(t *testing.T) {
 }
 
 func TestAnUpdateIsCappedAndPointsAtProjectContext(t *testing.T) {
-	const note = "… more changed: call `project_context` for the current instructions and memory.\n"
+	const note = "… more changed: call `project_context` and `owner_memory` for the current context.\n"
 	var added []projectcontext.Entry
 	for i := range 20 {
 		added = append(added, projectcontext.Entry{ID: "m" + strings.Repeat("0", i), Text: strings.Repeat("é", 120)})

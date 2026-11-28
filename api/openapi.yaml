@@ -54,6 +54,8 @@ tags:
     description: The owner's audit of privileged actions agents asked for.
   - name: devices
     description: The owner's registered phones, whose keys sign their API requests (docs/specs/devices.md).
+  - name: owner-memory
+    description: The owner's own standing preferences, loaded into every session (docs/specs/owner-memory.md).
 paths:
   /activity:
     get:
@@ -3553,6 +3555,131 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TaskError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
+  /owner/memory:
+    get:
+      tags:
+        - owner-memory
+      summary: Get Owner Memory
+      description: >-
+        The owner's memory: the few standing preferences that hold across every project, loaded
+        into every session the owner has (docs/specs/owner-memory.md). Active entries come first,
+        then lapsed ones, then proposals, each oldest first. Final entries are not listed.
+      operationId: getOwnerMemory
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OwnerMemory'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+  /owner/memory/settings:
+    put:
+      tags:
+        - owner-memory
+      summary: Set Owner Memory Settings
+      description: >-
+        Save the review window: how many days after its last confirmation an active entry is due
+        for review. It applies to every entry at once, from its last confirmation, and confirms
+        none. An owner setting, not policy.
+      operationId: setOwnerMemorySettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OwnerMemorySettings'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OwnerMemorySettings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/HTTPValidationError'
+                  - $ref: '#/components/schemas/HTTPError'
+  /owner/memory/{entry_id}/decision:
+    post:
+      tags:
+        - owner-memory
+      summary: Decide Owner Memory Entry
+      description: >-
+        The owner's decision on one entry. accept activates a proposal (replacing the active entry
+        it names); reject declines one; keep confirms an active entry, or makes a lapsed one active
+        again; forget ends an active or lapsed entry; moved ends one the owner moved to their
+        dotfiles; move_to_project adds the text to the project's memory as an active entry and
+        ends this one as moved. A decision on an entry already where it would leave it answers it
+        again. Any other state is 409, as is an accept, keep or move past a memory bound.
+      operationId: decideOwnerMemoryEntry
+      parameters:
+        - name: entry_id
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Entry Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OwnerMemoryDecision'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OwnerMemoryEntry'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '404':
+          description: Not Found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
         '422':
           description: Validation Error
           content:
@@ -7867,6 +7994,14 @@ components:
             - type: 'null'
           title: Delivery Id
           description: The session's latest message when the entry was recorded.
+        owner_entry_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Owner Entry Id
+          description: >-
+            For a project entry the owner moved from owner memory, the owner entry it came from.
+            Always null on an owner entry.
       additionalProperties: false
       type: object
       required:
@@ -7874,6 +8009,7 @@ components:
         - task_id
         - attempt_id
         - delivery_id
+        - owner_entry_id
       title: ProjectMemorySource
       description: Where an entry came from, as the server resolved it, not as the agent said.
     ProjectMemoryDecision:
@@ -7890,6 +8026,192 @@ components:
       required:
         - decision
       title: ProjectMemoryDecision
+    OwnerMemory:
+      properties:
+        entries:
+          items:
+            $ref: '#/components/schemas/OwnerMemoryEntry'
+          type: array
+          title: Entries
+          description: Active entries, then lapsed ones, then proposals, each oldest first.
+        used_bytes:
+          type: integer
+          minimum: 0
+          title: Used Bytes
+          description: UTF-8 bytes of the active entries' text.
+        max_bytes:
+          type: integer
+          title: Max Bytes
+          description: The most UTF-8 bytes active entries may hold together.
+        max_entry_bytes:
+          type: integer
+          title: Max Entry Bytes
+        review_after_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+          title: Review After Days
+          description: The owner's review window, 14 by default.
+        grace_days:
+          type: integer
+          title: Grace Days
+          description: >-
+            Days a due entry stays loaded before it lapses. Fixed, not a setting.
+      additionalProperties: false
+      type: object
+      required:
+        - entries
+        - used_bytes
+        - max_bytes
+        - max_entry_bytes
+        - review_after_days
+        - grace_days
+      title: OwnerMemory
+    OwnerMemoryEntry:
+      properties:
+        id:
+          type: string
+          title: Id
+        text:
+          type: string
+          title: Text
+        state:
+          $ref: '#/components/schemas/OwnerMemoryState'
+        author:
+          type: string
+          enum:
+            - main
+            - task
+          title: Author
+          description: >-
+            Who recorded it: the main session (active at once) or a supervisor task (a proposal).
+        source:
+          $ref: '#/components/schemas/ProjectMemorySource'
+        replaces_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Replaces Id
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        last_confirmed_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Last Confirmed At
+          description: >-
+            When it became active, or the owner last confirmed it. Null for an entry that was
+            never active.
+        decided_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Decided At
+          description: When it was accepted, rejected, withdrawn, lapsed or ended.
+        due_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Due At
+          description: >-
+            When an active or lapsed entry is due for review (past for a due one):
+            last_confirmed_at plus the review window. Null for other states.
+        lapsed_at:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+          title: Lapsed At
+          description: When a lapsed entry stopped being loaded.
+        in_dotfiles_commit:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: In Dotfiles Commit
+          description: >-
+            The dotfiles commit whose AGENTS.md was found to hold this text, whitespace and case
+            aside. Null when not found.
+        moved_to_project_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Moved To Project Id
+        moved_to_entry_id:
+          anyOf:
+            - type: string
+            - type: 'null'
+          title: Moved To Entry Id
+          description: The project memory entry a move to a project made.
+      additionalProperties: false
+      type: object
+      required:
+        - id
+        - text
+        - state
+        - author
+        - source
+        - replaces_id
+        - created_at
+        - last_confirmed_at
+        - decided_at
+        - due_at
+        - lapsed_at
+        - in_dotfiles_commit
+        - moved_to_project_id
+        - moved_to_entry_id
+      title: OwnerMemoryEntry
+    OwnerMemoryState:
+      type: string
+      enum:
+        - proposed
+        - active
+        - lapsed
+        - rejected
+        - withdrawn
+        - replaced
+        - forgotten
+        - moved
+      title: OwnerMemoryState
+    OwnerMemoryDecision:
+      properties:
+        decision:
+          type: string
+          enum:
+            - accept
+            - reject
+            - keep
+            - forget
+            - moved
+            - move_to_project
+          title: Decision
+        project_id:
+          type: string
+          minLength: 1
+          maxLength: 100
+          title: Project Id
+          description: The project a move_to_project moves the entry to; only with that decision.
+      additionalProperties: false
+      type: object
+      required:
+        - decision
+      title: OwnerMemoryDecision
+    OwnerMemorySettings:
+      properties:
+        review_after_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+          title: Review After Days
+      additionalProperties: false
+      type: object
+      required:
+        - review_after_days
+      title: OwnerMemorySettings
     ProjectVerification:
       properties:
         mode:

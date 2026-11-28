@@ -60,6 +60,9 @@ type Source struct {
 	TaskID     *string
 	AttemptID  *string
 	DeliveryID *string
+	// OwnerEntryID names the owner memory entry a project entry was moved from
+	// (docs/specs/owner-memory.md#moving-an-entry-to-a-project).
+	OwnerEntryID *string
 }
 
 // Entry is one memory entry.
@@ -130,7 +133,7 @@ func OpenMemory(ctx context.Context, q *dbq.Queries, projectID string) (Memory, 
 // new one takes the place of when it becomes active. Recording text that is already open answers
 // that entry, so a retried call adds nothing.
 func (s *Service) Remember(ctx context.Context, projectID string, by Recorder, text, replaces string) (Entry, error) {
-	text, err := entryText(text)
+	text, err := FoldEntry(text)
 	if err != nil {
 		return Entry{}, err
 	}
@@ -322,6 +325,34 @@ func closeProposal(ctx context.Context, q *dbq.Queries, row dbq.ProjectMemoryEnt
 	return entryOf(got), err
 }
 
+// AddMovedEntry adds text to the project's memory as an active entry moved there from owner memory
+// entry ownerEntryID, keeping the owner entry's author and source. The caller holds the owner's
+// memory lock and the project row lock (LockOwnedProject), in that order. An open entry with the
+// same text answers instead, so the project never holds the text twice: an active one as it is, a
+// proposal accepted as the moved entry (keeping its own source, and replacing what it names).
+// ErrMemoryFull when it does not fit.
+func AddMovedEntry(ctx context.Context, q *dbq.Queries, projectID, text string, author Author, src Source, ownerEntryID string) (Entry, error) {
+	existing, err := q.FindOpenProjectMemoryByText(ctx, dbq.FindOpenProjectMemoryByTextParams{ProjectID: projectID, Text: text})
+	switch {
+	case err == nil && existing.State == StateActive:
+		return entryOf(existing), nil
+	case err == nil && existing.State == StateProposed:
+		return accept(ctx, q, existing)
+	case err != nil && !errors.Is(err, pgx.ErrNoRows):
+		return Entry{}, err
+	}
+	seq, err := makeRoom(ctx, q, projectID, len(text), nil)
+	if err != nil {
+		return Entry{}, err
+	}
+	row, err := q.InsertProjectMemoryEntry(ctx, dbq.InsertProjectMemoryEntryParams{
+		ID: uuid.NewString(), ProjectID: projectID, Text: text, State: StateActive, Author: string(author),
+		SourceSessionID: src.SessionID, SourceTaskID: src.TaskID, SourceAttemptID: src.AttemptID,
+		SourceDeliveryID: src.DeliveryID, SourceOwnerEntryID: &ownerEntryID, ActivatedSeq: &seq,
+	})
+	return entryOf(row), err
+}
+
 // inProject runs fn under the owner's project row lock, which serializes every memory write on
 // the project.
 func (s *Service) inProject(ctx context.Context, projectID string, fn func(q *dbq.Queries) error) error {
@@ -342,8 +373,9 @@ func (s *Service) inProject(ctx context.Context, projectID string, fn func(q *db
 	return fmt.Errorf("project memory: %w", err)
 }
 
-// entryText validates an entry and folds it onto one line, so it renders as one list item.
-func entryText(text string) (string, error) {
+// FoldEntry validates a memory entry and folds it onto one line (runs of whitespace become one
+// space), so it renders as one list item. Owner memory entries are folded the same way.
+func FoldEntry(text string) (string, error) {
 	if !utf8.ValidString(text) || strings.ContainsRune(text, 0) {
 		return "", ErrInvalidText
 	}
@@ -399,7 +431,10 @@ func MemorySection(entries []Entry) string {
 func entryOf(r dbq.ProjectMemoryEntry) Entry {
 	return Entry{
 		ID: r.ID, ProjectID: r.ProjectID, Text: r.Text, State: r.State, Author: Author(r.Author),
-		Source:     Source{SessionID: r.SourceSessionID, TaskID: r.SourceTaskID, AttemptID: r.SourceAttemptID, DeliveryID: r.SourceDeliveryID},
+		Source: Source{
+			SessionID: r.SourceSessionID, TaskID: r.SourceTaskID, AttemptID: r.SourceAttemptID,
+			DeliveryID: r.SourceDeliveryID, OwnerEntryID: r.SourceOwnerEntryID,
+		},
 		ReplacesID: r.ReplacesID, CreatedAt: r.CreatedAt, DecidedAt: r.DecidedAt,
 	}
 }

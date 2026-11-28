@@ -1221,6 +1221,66 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/owner/memory': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Owner Memory
+     * @description The owner's memory: the few standing preferences that hold across every project, loaded into every session the owner has (docs/specs/owner-memory.md). Active entries come first, then lapsed ones, then proposals, each oldest first. Final entries are not listed.
+     */
+    get: operations['getOwnerMemory'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/owner/memory/settings': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    /**
+     * Set Owner Memory Settings
+     * @description Save the review window: how many days after its last confirmation an active entry is due for review. It applies to every entry at once, from its last confirmation, and confirms none. An owner setting, not policy.
+     */
+    put: operations['setOwnerMemorySettings'];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/owner/memory/{entry_id}/decision': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Decide Owner Memory Entry
+     * @description The owner's decision on one entry. accept activates a proposal (replacing the active entry it names); reject declines one; keep confirms an active entry, or makes a lapsed one active again; forget ends an active or lapsed entry; moved ends one the owner moved to their dotfiles; move_to_project adds the text to the project's memory as an active entry and ends this one as moved. A decision on an entry already where it would leave it answers it again. Any other state is 409, as is an accept, keep or move past a memory bound.
+     */
+    post: operations['decideOwnerMemoryEntry'];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/queue/{item_id}/dismiss': {
     parameters: {
       query?: never;
@@ -2813,6 +2873,11 @@ export interface components {
        * @description The session's latest message when the entry was recorded.
        */
       delivery_id: string | null;
+      /**
+       * Owner Entry Id
+       * @description For a project entry the owner moved from owner memory, the owner entry it came from. Always null on an owner entry.
+       */
+      owner_entry_id: string | null;
     };
     /** ProjectMemoryDecision */
     ProjectMemoryDecision: {
@@ -2821,6 +2886,121 @@ export interface components {
        * @enum {string}
        */
       decision: 'accept' | 'reject' | 'revoke';
+    };
+    /** OwnerMemory */
+    OwnerMemory: {
+      /**
+       * Entries
+       * @description Active entries, then lapsed ones, then proposals, each oldest first.
+       */
+      entries: components['schemas']['OwnerMemoryEntry'][];
+      /**
+       * Used Bytes
+       * @description UTF-8 bytes of the active entries' text.
+       */
+      used_bytes: number;
+      /**
+       * Max Bytes
+       * @description The most UTF-8 bytes active entries may hold together.
+       */
+      max_bytes: number;
+      /** Max Entry Bytes */
+      max_entry_bytes: number;
+      /**
+       * Review After Days
+       * @description The owner's review window, 14 by default.
+       */
+      review_after_days: number;
+      /**
+       * Grace Days
+       * @description Days a due entry stays loaded before it lapses. Fixed, not a setting.
+       */
+      grace_days: number;
+    };
+    /** OwnerMemoryEntry */
+    OwnerMemoryEntry: {
+      /** Id */
+      id: string;
+      /** Text */
+      text: string;
+      state: components['schemas']['OwnerMemoryState'];
+      /**
+       * Author
+       * @description Who recorded it: the main session (active at once) or a supervisor task (a proposal).
+       * @enum {string}
+       */
+      author: 'main' | 'task';
+      source: components['schemas']['ProjectMemorySource'];
+      /** Replaces Id */
+      replaces_id: string | null;
+      /**
+       * Created At
+       * Format: date-time
+       */
+      created_at: string;
+      /**
+       * Last Confirmed At
+       * @description When it became active, or the owner last confirmed it. Null for an entry that was never active.
+       */
+      last_confirmed_at: string | null;
+      /**
+       * Decided At
+       * @description When it was accepted, rejected, withdrawn, lapsed or ended.
+       */
+      decided_at: string | null;
+      /**
+       * Due At
+       * @description When an active or lapsed entry is due for review (past for a due one): last_confirmed_at plus the review window. Null for other states.
+       */
+      due_at: string | null;
+      /**
+       * Lapsed At
+       * @description When a lapsed entry stopped being loaded.
+       */
+      lapsed_at: string | null;
+      /**
+       * In Dotfiles Commit
+       * @description The dotfiles commit whose AGENTS.md was found to hold this text, whitespace and case aside. Null when not found.
+       */
+      in_dotfiles_commit: string | null;
+      /** Moved To Project Id */
+      moved_to_project_id: string | null;
+      /**
+       * Moved To Entry Id
+       * @description The project memory entry a move to a project made.
+       */
+      moved_to_entry_id: string | null;
+    };
+    /**
+     * OwnerMemoryState
+     * @enum {string}
+     */
+    OwnerMemoryState:
+      | 'proposed'
+      | 'active'
+      | 'lapsed'
+      | 'rejected'
+      | 'withdrawn'
+      | 'replaced'
+      | 'forgotten'
+      | 'moved';
+    /** OwnerMemoryDecision */
+    OwnerMemoryDecision: {
+      /**
+       * Decision
+       * @enum {string}
+       */
+      decision: 'accept' | 'reject' | 'keep' | 'forget' | 'moved' | 'move_to_project';
+      /**
+       * Project Id
+       * @description The project a move_to_project moves the entry to; only with that decision.
+       */
+      project_id?: string;
+    };
+    /** OwnerMemorySettings */
+    OwnerMemorySettings: {
+      /** Review After Days */
+      review_after_days: number;
     };
     /** ProjectVerification */
     ProjectVerification: {
@@ -11119,6 +11299,146 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['TaskError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  getOwnerMemory: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['OwnerMemory'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  setOwnerMemorySettings: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['OwnerMemorySettings'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['OwnerMemorySettings'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json':
+            | components['schemas']['HTTPValidationError']
+            | components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  decideOwnerMemoryEntry: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        entry_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['OwnerMemoryDecision'];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['OwnerMemoryEntry'];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
         };
       };
       /** @description Validation Error */

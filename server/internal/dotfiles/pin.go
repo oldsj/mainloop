@@ -75,7 +75,41 @@ func (e *Exports) Pin(ctx context.Context, sessionID, requestID, mcpOrigin strin
 	if err != nil {
 		return Pinned{}, err
 	}
-	return Record(ctx, q, sessionID, requestID, mcpOrigin, p)
+	p, err = Record(ctx, q, sessionID, requestID, mcpOrigin, p)
+	if err == nil {
+		e.ownerExported(ctx, q, sessionID, src, p)
+	}
+	return p, err
+}
+
+// ownerExported gives OwnerExported the AGENTS.md of a ready pin of the owner's own source (a
+// project's source is not the owner's dotfiles). It never fails the pin: a failure is logged.
+func (e *Exports) ownerExported(ctx context.Context, q *dbq.Queries, sessionID string, src Source, p Pinned) {
+	if e.OwnerExported == nil || p.Status != StatusReady || p.Digest == "" {
+		return
+	}
+	in, err := q.GetSessionDotfilesSourceInputs(ctx, sessionID)
+	if err != nil {
+		e.log().WarnContext(ctx, "dotfiles: owner export check: read the session", "error", err)
+		return
+	}
+	row, err := q.GetOwnerDotfilesSource(ctx, in.UserID)
+	if err != nil || row.Repository == nil || !strings.EqualFold(*row.Repository, src.Repository) || row.Ref != src.Ref || row.Path != src.Path {
+		return
+	}
+	bundle, ok, err := e.BundleContent(ctx, p.Digest)
+	if err != nil || !ok {
+		e.log().WarnContext(ctx, "dotfiles: owner export check: read the bundle", "found", ok, "error", err)
+		return
+	}
+	agents, err := BundleFile(bundle, "AGENTS.md")
+	if err != nil {
+		e.log().WarnContext(ctx, "dotfiles: owner export check: read AGENTS.md", "error", err)
+		return
+	}
+	if err := e.OwnerExported(ctx, in.UserID, p.Commit, agents); err != nil {
+		e.log().WarnContext(ctx, "dotfiles: owner export check failed", "error", err)
+	}
 }
 
 // Record writes p as the pin of create request requestID unless the request has one, and returns

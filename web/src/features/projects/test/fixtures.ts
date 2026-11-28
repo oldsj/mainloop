@@ -175,7 +175,13 @@ export function memoryEntry(overrides: Partial<MemoryEntryFixture> = {}): Memory
     text: 'The owner reviews UI on a phone.',
     state: 'active',
     author: 'main',
-    source: { session_id: 'main-1', task_id: null, attempt_id: null, delivery_id: 'd-1' },
+    source: {
+      session_id: 'main-1',
+      task_id: null,
+      attempt_id: null,
+      delivery_id: 'd-1',
+      owner_entry_id: null
+    },
     replaces_id: null,
     created_at: '2026-11-01T12:00:00Z',
     decided_at: '2026-11-01T12:00:00Z',

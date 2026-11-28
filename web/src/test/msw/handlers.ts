@@ -28,6 +28,14 @@ const orchestrationHealth: Schemas['HealthView'] = {
   retention: { events_days: 7, summaries_days: 90 }
 };
 const providers: Schemas['ProviderProfile'][] = [];
+const ownerMemory: Schemas['OwnerMemory'] = {
+  entries: [],
+  used_bytes: 0,
+  max_bytes: 3072,
+  max_entry_bytes: 500,
+  review_after_days: 14,
+  grace_days: 7
+};
 const devices: Schemas['Device'][] = [];
 
 /**
@@ -161,6 +169,8 @@ export const baseHandlers = [
   http.get(url('/providers'), () => HttpResponse.json(providers)),
   // Settings lists the owner's devices; none are registered unless a test serves its own.
   http.get(url('/devices'), () => HttpResponse.json(devices)),
+  // Settings shows the owner's memory; it is empty unless a test serves its own.
+  http.get(url('/owner/memory'), () => HttpResponse.json(ownerMemory)),
   ...sessionDefaultsHandlers(),
   ...dotfilesHandlers(),
   ...testSeen.handlers

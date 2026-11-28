@@ -9,25 +9,31 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 )
 
-// MaxUpdateBytes bounds the block a running task session gets in front of its next message when its
-// project's context changed (docs/specs/project-context.md#running-sessions). Past it, the block
-// says to read the rest with project_context.
+// MaxUpdateBytes bounds the block a running session gets in front of its next message when its
+// context changed (docs/specs/project-context.md#running-sessions): its project's instructions and
+// memory, and its owner's memory, share it. Past it, the block says to read the rest with
+// project_context and owner_memory.
 const MaxUpdateBytes = 2048
 
 // smallInstructionsBytes is the size up to which changed instructions are sent whole rather than as
 // the lines that changed.
 const smallInstructionsBytes = 1024
 
-// UpdateMarker opens the block, the way the main session's context block opens with its own marker.
-const UpdateMarker = "[mainloop:project-context]"
+// UpdateMarker opens the block. It is the main session's context marker: the block is a later part
+// of the same standing context.
+const UpdateMarker = "[mainloop:context]"
 
-const updateCut = "… more changed: call `project_context` for the current instructions and memory.\n"
+// updateHeader follows the marker on the block's first line.
+const updateHeader = " Your context changed since you were given it. Where they differ, this replaces what you were given.\n"
+
+const updateCut = "… more changed: call `project_context` and `owner_memory` for the current context.\n"
 
 // Update is the project's context now, and what changed since a session was given an earlier one.
 type Update struct {
 	InstructionsVersion int
 	MemorySeq           int64
-	// Block is "" when nothing a session reads changed (or nothing changed at all).
+	// Block is the change's body (Change.Body), "" when nothing a session reads changed (or nothing
+	// changed at all). Block wraps it, with any other part, for the message.
 	Block string
 }
 
@@ -72,7 +78,7 @@ func UpdateSince(ctx context.Context, q *dbq.Queries, projectID string, version 
 		}
 		change.Added, change.Removed = entryChanges(before, after)
 	}
-	out.Block = change.Render()
+	out.Block = change.Body()
 	return out, nil
 }
 
@@ -121,9 +127,12 @@ type Change struct {
 	Removed      []Entry
 }
 
-// Render writes the change as the block a session gets in front of its next message, at most
-// MaxUpdateBytes, or "" when there is nothing to say.
-func (c Change) Render() string {
+// Render writes the change alone as the block a session gets in front of its next message.
+func (c Change) Render() string { return Block(c.Body(), false) }
+
+// Body writes the change's sections without the block's opening line, "" when there is nothing to
+// say.
+func (c Change) Body() string {
 	var b strings.Builder
 	if c.Instructions != nil {
 		renderInstructions(&b, c.Instructions[0], c.Instructions[1])
@@ -137,12 +146,28 @@ func (c Change) Render() string {
 			fmt.Fprintf(&b, "- Removed: %s (memory %s)\n", e.Text, e.ID)
 		}
 	}
-	if b.Len() == 0 {
+	return b.String()
+}
+
+// Block opens body, the sections of what changed (project and owner memory alike), with the
+// marker line, and cuts it to MaxUpdateBytes; "" for an empty body with nothing more. more says
+// that a part was left out on purpose (sent with a later message), so the block ends with the cut
+// note even when it fits.
+func Block(body string, more bool) string {
+	if body == "" && !more {
 		return ""
 	}
-	block := UpdateMarker + " This project's context changed since your brief. " +
-		"Where they differ, this replaces what your brief said.\n" + b.String()
+	block := UpdateMarker + updateHeader + body
+	if more && len(block)+len(updateCut) <= MaxUpdateBytes {
+		return block + updateCut
+	}
 	return capBlock(block)
+}
+
+// Room is how many bytes a block whose sections so far are body has left for more, keeping room
+// for the cut note, so whatever fits in it is sent whole.
+func Room(body string) int {
+	return MaxUpdateBytes - len(UpdateMarker) - len(updateHeader) - len(body) - len(updateCut)
 }
 
 func renderInstructions(b *strings.Builder, old, cur Instructions) {

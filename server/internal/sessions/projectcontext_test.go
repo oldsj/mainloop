@@ -9,6 +9,7 @@ import (
 
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 	"github.com/oldsj/mainloop/server/internal/kagent/kagenttest"
+	"github.com/oldsj/mainloop/server/internal/ownermemory"
 	"github.com/oldsj/mainloop/server/internal/projectcontext"
 	"github.com/oldsj/mainloop/server/internal/sessions"
 )
@@ -72,7 +73,7 @@ func TestARunningTaskGetsProjectContextChangesOnItsNextMessage(t *testing.T) {
 	}
 	id := e.sendTo(sid, "keep going")
 	e.waitState(id, dbstate.DeliveryCompleted)
-	want := projectcontext.UpdateMarker + " This project's context changed since your brief. Where they differ, this replaces what your brief said.\n" +
+	want := projectcontext.UpdateMarker + " Your context changed since you were given it. Where they differ, this replaces what you were given.\n" +
 		"## Project instructions (owner, v1, were none)\nMerge with --squash.\n" +
 		"## Project memory changes\n- New: The owner reviews UI on a phone. (memory " + entry.ID + ")\n" +
 		newMarker + "\nkeep going"
@@ -96,7 +97,7 @@ func TestARunningTaskGetsProjectContextChangesOnItsNextMessage(t *testing.T) {
 	e.waitState(lost, dbstate.DeliveryFailed)
 	id = e.sendTo(sid, "after the refusal")
 	e.waitState(id, dbstate.DeliveryCompleted)
-	want = projectcontext.UpdateMarker + " This project's context changed since your brief. Where they differ, this replaces what your brief said.\n" +
+	want = projectcontext.UpdateMarker + " Your context changed since you were given it. Where they differ, this replaces what you were given.\n" +
 		"## Project memory changes\n- Removed: The owner reviews UI on a phone. (memory " + entry.ID + ")\n" +
 		newMarker + "\nafter the refusal"
 	if got := log.last(t); got.ID != id || got.Text != want {
@@ -121,8 +122,66 @@ func TestAMainSessionGetsNoProjectContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.waitState(e.send("hello"), dbstate.DeliveryCompleted)
-	if strings.Contains(log.last(t).Text, projectcontext.UpdateMarker) {
-		t.Fatalf("main got project context: %q", log.last(t).Text)
+	if got := log.last(t).Text; strings.Contains(got, "## Project instructions") || strings.Contains(got, "Merge with --squash.") {
+		t.Fatalf("main got project context: %q", got)
+	}
+}
+
+// TestRunningSessionsGetOwnerMemoryChangesOnce: a change to owner memory reaches a running task
+// session and the main session in front of each one's next message, once: the whole section for
+// a session that had none, then only what changed.
+func TestRunningSessionsGetOwnerMemoryChangesOnce(t *testing.T) {
+	var log sentLog
+	e := newEnv(t, carryOpt(t, 6, &log))
+	e.withProviders()
+	e.run()
+	ctx := context.Background()
+	sid := e.taskSession()
+	om := &ownermemory.Service{Pool: e.pool, OwnerID: owner}
+	main := ownermemory.Recorder{Author: ownermemory.AuthorMain}
+
+	// The main session's context block carries the owner's memory as it is when rendered.
+	first, err := om.Remember(ctx, main, "I review UI on my phone.", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.waitState(e.send("hello"), dbstate.DeliveryCompleted)
+	if got := log.last(t).Text; !strings.Contains(got, "## Owner memory\n") || !strings.Contains(got, "- I review UI on my phone. (owner memory "+first.ID+", confirmed ") {
+		t.Fatalf("main's block = %q", got)
+	}
+	if d := e.waitState(e.send("again"), dbstate.DeliveryCompleted); d.SentText != nil && strings.Contains(*d.SentText, "Owner memory") {
+		t.Fatalf("main was given owner memory twice: %q", *d.SentText)
+	}
+
+	// The task session had none, so it gets the whole section once.
+	id := e.sendTo(sid, "keep going")
+	e.waitState(id, dbstate.DeliveryCompleted)
+	if got := log.last(t); got.ID != id || !strings.HasPrefix(got.Text, projectcontext.UpdateMarker+" Your context changed") ||
+		!strings.Contains(got.Text, "## Owner memory\n") || !strings.HasSuffix(got.Text, newMarker+"\nkeep going") {
+		t.Fatalf("task sent %q", got.Text)
+	}
+	if d := e.waitState(e.sendTo(sid, "and again"), dbstate.DeliveryCompleted); d.SentText != nil {
+		t.Fatalf("a change was given twice: %q", *d.SentText)
+	}
+
+	// A later entry goes to both as a change, once.
+	second, err := om.Remember(ctx, main, "Prefer short PRs.", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "## Owner memory changes\n- New: Prefer short PRs. (owner memory " + second.ID + ", confirmed "
+	id = e.sendTo(sid, "next")
+	e.waitState(id, dbstate.DeliveryCompleted)
+	if got := log.last(t); got.ID != id || !strings.Contains(got.Text, want) || strings.Contains(got.Text, "## Owner memory\n") {
+		t.Fatalf("task sent %q", got.Text)
+	}
+	id = e.send("main next")
+	e.waitState(id, dbstate.DeliveryCompleted)
+	if got := log.last(t); got.ID != id || !strings.Contains(got.Text, want) {
+		t.Fatalf("main sent %q", got.Text)
+	}
+	if d := e.waitState(e.send("main again"), dbstate.DeliveryCompleted); d.SentText != nil && strings.Contains(*d.SentText, "Owner memory") {
+		t.Fatalf("main was given the change twice: %q", *d.SentText)
 	}
 }
 

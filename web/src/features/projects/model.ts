@@ -560,18 +560,22 @@ const MEMORY_STATES = contractEnum<Schemas['ProjectMemoryState']>()([
 ]);
 const MEMORY_AUTHORS = contractEnum<ProjectMemoryEntry['author']>()(['main', 'task', 'agent']);
 
+/** Where a project or owner memory entry came from, as the server resolved it. */
+export const memorySourceSchema: z.ZodType<Schemas['ProjectMemorySource']> = z.object({
+  session_id: text.nullable(),
+  task_id: text.nullable(),
+  attempt_id: text.nullable(),
+  delivery_id: text.nullable(),
+  owner_entry_id: text.nullable()
+});
+
 export const memoryEntrySchema: z.ZodType<ProjectMemoryEntry> = z.object({
   id: text,
   project_id: text,
   text,
   state: z.enum(MEMORY_STATES),
   author: z.enum(MEMORY_AUTHORS),
-  source: z.object({
-    session_id: text.nullable(),
-    task_id: text.nullable(),
-    attempt_id: text.nullable(),
-    delivery_id: text.nullable()
-  }),
+  source: memorySourceSchema,
   replaces_id: text.nullable(),
   created_at: text,
   decided_at: text.nullable()
@@ -597,6 +601,7 @@ export function memoryLists(entries: unknown[]) {
 
 /** Who recorded an entry and when, as the owner reads it; an accepted proposal says so. */
 export function memoryOrigin(entry: ProjectMemoryEntry, ago: (iso: string) => string): string {
+  if (entry.source.owner_entry_id) return `Moved from owner memory, ${ago(entry.created_at)}`;
   const who =
     entry.author === 'main' ? 'By main' : entry.author === 'task' ? 'From a task' : 'From an agent';
   const accepted =

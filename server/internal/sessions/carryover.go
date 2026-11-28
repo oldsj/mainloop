@@ -13,6 +13,7 @@ import (
 	"github.com/oldsj/mainloop/server/internal/agentcontext"
 	"github.com/oldsj/mainloop/server/internal/db/dbq"
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
+	"github.com/oldsj/mainloop/server/internal/ownermemory"
 )
 
 // carryMessageChars cuts each carried message, so the preamble stays small however long the earlier
@@ -59,21 +60,45 @@ func (t *turn) frozenText(ctx context.Context, q *dbq.Queries) (text *string, gi
 		if b.GuidanceVersion != nil && *b.GuidanceVersion == agentcontext.Version {
 			return nil, nil, nil
 		}
-		rendered := t.withContext("")
-		return &rendered, &givenContext{}, nil
+		owner, seq, err := t.ownerSection(ctx, q)
+		if err != nil {
+			return nil, nil, err
+		}
+		rendered := t.withContext(owner, "")
+		return &rendered, &givenContext{ownerMemorySeq: &seq}, nil
+	}
+	owner, seq, err := t.ownerSection(ctx, q)
+	if err != nil {
+		return nil, nil, err
 	}
 	earlier, err := t.carriedConversation(ctx, q)
 	if err != nil {
 		return nil, nil, err
 	}
-	rendered := t.withContext(earlier)
-	return &rendered, &givenContext{standingHash: ptrStr(standingHash(t.c.ID, rendered))}, nil
+	rendered := t.withContext(owner, earlier)
+	return &rendered, &givenContext{standingHash: ptrStr(standingHash(t.c.ID, rendered)), ownerMemorySeq: &seq}, nil
+}
+
+// ownerSection is the owner's active memory now, as the section the main session's context block
+// carries after the guidance, and the sequence it is at.
+func (t *turn) ownerSection(ctx context.Context, q *dbq.Queries) (string, int64, error) {
+	seq, err := ownermemory.Seq(ctx, q, t.d.UserID)
+	if err != nil {
+		return "", 0, err
+	}
+	lines, err := ownermemory.At(ctx, q, t.d.UserID, seq)
+	if err != nil {
+		return "", 0, err
+	}
+	return ownermemory.Section(lines), seq, nil
 }
 
 // givenContext is what a delivery that froze context text records on the binding. A nil
 // standingHash means the Session already had its standing context and was given only the guidance.
+// ownerMemorySeq is the owner memory the block carried, which the delivery records.
 type givenContext struct {
-	standingHash *string
+	standingHash   *string
+	ownerMemorySeq *int64
 }
 
 // standingHash is what the binding records for a delivery that froze this text. It includes the
@@ -84,10 +109,13 @@ func standingHash(deliveryID, text string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// withContext renders the message with the preamble in front of it: mainContext, then the earlier
-// conversation when there is any to carry.
-func (t *turn) withContext(earlier string) string {
-	return mainContext + earlier + newMessageMarker + "\n" + t.d.Content
+// withContext renders the message with the preamble in front of it: mainContext, then the owner's
+// memory section when there is one, then the earlier conversation when there is any to carry.
+func (t *turn) withContext(owner, earlier string) string {
+	if owner != "" {
+		owner = "\n" + owner
+	}
+	return mainContext + owner + earlier + newMessageMarker + "\n" + t.d.Content
 }
 
 // newMessageMarker ends the preamble; the owner's message follows it.
