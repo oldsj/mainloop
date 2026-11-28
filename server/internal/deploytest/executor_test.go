@@ -571,3 +571,42 @@ func TestExecutorToolbox(t *testing.T) {
 		}
 	}
 }
+
+// Cluster reach is off unless executor.toolbox.clusterReach is on, and then the executor is told
+// the proxy sidecar's image: its own, by digest. It needs Kubernetes access (the token is for the
+// admin account) and an image pinned by digest.
+func TestExecutorToolboxClusterReach(t *testing.T) {
+	if _, ok := envByName(render(t, "production-executor-toolbox").deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])["MAINLOOP_EXECUTOR_TOOLBOX_PROXY_IMAGE"]; ok {
+		t.Error("cluster reach is on without executor.toolbox.clusterReach")
+	}
+	r := render(t, "production-executor-toolbox-cluster")
+	env := envByName(r.deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])
+	want := "ghcr.io/oldsj/mainloop-backend@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	if env["MAINLOOP_EXECUTOR_TOOLBOX_PROXY_IMAGE"].Value != want || env["MAINLOOP_EXECUTOR_TOOLBOX_ENABLED"].Value != "true" {
+		t.Errorf("proxy image = %q", env["MAINLOOP_EXECUTOR_TOOLBOX_PROXY_IMAGE"].Value)
+	}
+	helm, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm is not installed")
+	}
+	base := []string{"template", "mainloop", chart, "--namespace", "mainloop", "-f", filepath.Join(chart, "ci/production-values.yaml"),
+		"--set", "executor.enabled=true", "--set", "executor.namespace=mainloop-executor", "--set", "executor.approvals.mode=web",
+		"--set", "executor.toolbox.enabled=true", "--set", "executor.toolbox.clusterReach=true",
+		"--set", "executor.toolbox.image=ghcr.io/oldsj/mainloop-toolbox@sha256:" + strings.Repeat("a", 64)}
+	for name, tc := range map[string]struct {
+		set  []string
+		want string
+	}{
+		"no kubernetes": {[]string{"executor.image.repository=ghcr.io/x/y", "executor.image.digest=sha256:" + strings.Repeat("b", 64)}, "clusterReach needs executor.kubernetes.enabled"},
+		"no digest":     {[]string{"executor.kubernetes.enabled=true"}, "pinned by digest"},
+	} {
+		args := slices.Clone(base)
+		for _, s := range tc.set {
+			args = append(args, "--set", s)
+		}
+		out, err := exec.CommandContext(t.Context(), helm, args...).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), tc.want) {
+			t.Errorf("%s: err %v, output %.300s", name, err, out)
+		}
+	}
+}

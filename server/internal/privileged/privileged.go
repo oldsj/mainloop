@@ -228,6 +228,9 @@ type Service struct {
 	ToolboxOn bool
 	// Toolbox makes and reads the toolbox pods; nil without a toolbox.
 	Toolbox Toolbox
+	// ToolboxProxyImage is the image of the kube proxy sidecar (the executor's own, by digest):
+	// set, a run may have cluster reach.
+	ToolboxProxyImage string
 	// ToolboxImage is the toolbox image, pinned by digest: what a run's pod uses, and what its
 	// card froze.
 	ToolboxImage string

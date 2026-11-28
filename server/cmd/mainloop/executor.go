@@ -90,6 +90,7 @@ func serveExecutor(ctx context.Context, log *slog.Logger) error {
 		clients := privileged.KubeClients{Client: kube, Base: kc, Namespace: cfg.Namespace}
 		svc.Toolbox = &privileged.KubeToolbox{Clients: clients, Namespace: cfg.ToolboxNamespace, PullSecrets: cfg.ToolboxPullSecretSet}
 		svc.ToolboxImage = cfg.ToolboxImage
+		svc.ToolboxProxyImage = cfg.ToolboxProxyImage
 	}
 	r := &privileged.Runner{Service: svc}
 	log.Info("executor ready", "types", privileged.TypesFor(true), "secret_namespaces", cfg.SecretNamespaces,

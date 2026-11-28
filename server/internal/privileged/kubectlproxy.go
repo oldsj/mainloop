@@ -46,8 +46,14 @@ const maxProxyBody = 1 << 20
 // In preflight, before the owner has approved anything, every write is made a server dry run and
 // streams (exec, attach, port-forward) are refused.
 type kubeProxy struct {
-	own       string
-	preflight bool
+	own string
+	// protected are namespaces beside own that no request may name: command.exec's run mode keeps
+	// the toolbox namespace (the proxy's own Secret is there) out of reach.
+	protected []string
+	// portForward lets a port-forward stream through beside exec: a toolbox run reaches an
+	// in-cluster Service (a database) that way.
+	portForward bool
+	preflight   bool
 	runToken  string
 	token     string
 	proxy     *httputil.ReverseProxy
@@ -82,6 +88,12 @@ func loopbackCert() (tls.Certificate, []byte, error) {
 }
 
 func newKubeProxy(cfg *rest.Config, own string, preflight bool) (*kubeProxy, error) {
+	return newKubeProxyFor(cfg, own, preflight, nil, false)
+}
+
+// newKubeProxyFor is newKubeProxy with more protected namespaces and, if portForward, the
+// port-forward stream.
+func newKubeProxyFor(cfg *rest.Config, own string, preflight bool, protected []string, portForward bool) (*kubeProxy, error) {
 	target, err := url.Parse(cfg.Host)
 	if err != nil || target.Host == "" {
 		return nil, fmt.Errorf("kubectl proxy: API server address %q: %w", cfg.Host, err)
@@ -103,7 +115,7 @@ func newKubeProxy(cfg *rest.Config, own string, preflight bool) (*kubeProxy, err
 	if err != nil {
 		return nil, fmt.Errorf("kubectl proxy: certificate: %w", err)
 	}
-	p := &kubeProxy{own: own, preflight: preflight, runToken: hex.EncodeToString(b), token: cfg.BearerToken,
+	p := &kubeProxy{own: own, protected: protected, portForward: portForward, preflight: preflight, runToken: hex.EncodeToString(b), token: cfg.BearerToken,
 		tls: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}, caPEM: certPEM}
 	p.proxy = &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -217,6 +229,8 @@ func (p *kubeProxy) refuse(r *http.Request) string {
 	switch {
 	case a.namespace == p.own || a.resource == "namespaces" && a.name == p.own && !a.namespacedCollections:
 		return "the executor's own namespace"
+	case slices.Contains(p.protected, a.namespace) || a.resource == "namespaces" && slices.Contains(p.protected, a.name) && !a.namespacedCollections:
+		return "the toolbox namespace"
 	case a.resource == "namespaces" && a.name == "" && r.Method == http.MethodDelete:
 		return "deleting every namespace"
 	case a.group == "" && a.resource == "secrets":
@@ -227,7 +241,7 @@ func (p *kubeProxy) refuse(r *http.Request) string {
 		return "admission policies and webhooks; change them through GitOps"
 	case a.group == "rbac.authorization.k8s.io" && write && (strings.HasPrefix(a.name, p.own+"-") || r.Method == http.MethodDelete && a.name == ""):
 		return "the executor's own roles and bindings"
-	case upgrade && a.sub != "exec":
+	case upgrade && a.sub != "exec" && !(p.portForward && a.sub == "portforward"):
 		return "a stream other than exec"
 	}
 	return ""

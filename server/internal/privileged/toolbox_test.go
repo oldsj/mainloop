@@ -392,7 +392,7 @@ func TestExecArguments(t *testing.T) {
 		want string
 	}{
 		"target":              {bad(map[string]any{"target": "nas"}), `target is "toolbox"`},
-		"cluster reach":       {bad(map[string]any{"reach": "cluster"}), "not available yet"},
+		"both reaches":        {bad(map[string]any{"reach": "internet,cluster"}), "reach is"},
 		"no reach":            {bad(map[string]any{"reach": nil}), "reach is"},
 		"lan reach":           {bad(map[string]any{"reach": "lan:nas"}), "reach is"},
 		"empty":               {bad(map[string]any{"script": "  \n"}), "script is the bash script"},
@@ -438,4 +438,78 @@ func TestExecTagsAndExpiry(t *testing.T) {
 		}
 	}
 	t.Fatal("no card for the risky script")
+}
+
+const proxyImage = "ghcr.io/oldsj/mainloop-backend@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+
+func clusterArgs(script string) map[string]any {
+	a := execArgs(script)
+	a["reach"] = "cluster"
+	return a
+}
+
+// Cluster reach needs an executor with the proxy sidecar. With it, the card says the script reaches
+// the Kubernetes API as cluster-admin through the proxy and not the internet, tags it, and shows
+// the proxy's digest; the facts freeze it, and the run is stale if the proxy image changed.
+func TestExecClusterReach(t *testing.T) {
+	f := newFakeToolbox()
+	f.finishes(podRan, "node/worker-1\n")
+	e := newToolboxEnv(t, f)
+	e.ex.ToolboxProxyImage = ""
+	a := e.request(t, privileged.TypeExec, "exec-no-proxy", clusterArgs("kubectl get nodes"))
+	e.runExecutor(t)
+	if a = e.get(t, a.ID); a.State != "preflight_failed" || !strings.Contains(deref(a.LastError), "no cluster reach") {
+		t.Fatalf("without the proxy: %+v (%v)", a, deref(a.LastError))
+	}
+
+	e.ex.ToolboxProxyImage = proxyImage
+	a = e.request(t, privileged.TypeExec, "exec-cluster", clusterArgs("kubectl get nodes\nkubectl -n widgets delete pod wedged-0\n"))
+	a, card := e.preflighted(t, a.ID)
+	cardHas(t, card, "Run a script in the toolbox", "kubectl get nodes", "Kubernetes API as cluster-admin", "proxy sidecar (ghcr.io/oldsj/mainloop-backend@sha256:fedcba987654",
+		"alone holds a token minted for this run", "refuses Secrets", "executor's and the toolbox's namespaces", "port-forward", "no internet",
+		"holds the run's cluster-admin token", "destructive: may delete or wipe (delete)", "reach: cluster, cluster-admin")
+	if strings.Contains(card, "can reach the internet") || strings.Contains(card, "holds no credential of Mainloop's") {
+		t.Errorf("the card describes internet reach:\n%s", card)
+	}
+	if seen := string(privileged.AgentFacts(a.Type, a.Facts)); !strings.Contains(seen, `"proxy_image": "`+proxyImage) || !strings.Contains(seen, `"reach": "cluster"`) {
+		t.Fatalf("the agent sees %s", seen)
+	}
+	e.approve(t, a.ID)
+	e.runExecutor(t)
+	if a = e.get(t, a.ID); a.State != privileged.StateSucceeded || len(f.created) != 1 || f.created[0].ProxyImage != proxyImage || f.created[0].Reach != "cluster" {
+		t.Fatalf("%+v (%v), pods %+v", a, deref(a.LastError), f.created)
+	}
+
+	// An internet run carries no proxy.
+	b := e.request(t, privileged.TypeExec, "exec-internet", execArgs("dig example.org"))
+	b, _ = e.preflighted(t, b.ID)
+	if strings.Contains(string(b.Facts), "proxy_image") {
+		t.Errorf("facts = %s", b.Facts)
+	}
+
+	// The proxy image changed after the owner saw the card: stale, nothing made.
+	c := e.request(t, privileged.TypeExec, "exec-stale", clusterArgs("kubectl get ns"))
+	c, _ = e.preflighted(t, c.ID)
+	e.approve(t, c.ID)
+	e.ex.ToolboxProxyImage = "ghcr.io/oldsj/mainloop-backend@sha256:" + strings.Repeat("a", 64)
+	e.runExecutor(t)
+	if c = e.get(t, c.ID); c.State != privileged.StateStale || len(f.created) != 1 {
+		t.Fatalf("%+v (%v), pods %d", c, deref(c.LastError), len(f.created))
+	}
+}
+
+// A cluster-reach pod whose proxy never produced a kubeconfig reports so in its termination
+// message: the script never ran, so it fails with nothing having run.
+func TestExecClusterProxyNotReady(t *testing.T) {
+	f := newFakeToolbox()
+	f.finishes(privileged.ToolboxState{Phase: privileged.ToolboxExited, Started: true, ExitCode: 97, Reason: "Error", Message: "kube proxy not ready"}, "")
+	e := newToolboxEnv(t, f)
+	e.ex.ToolboxProxyImage = proxyImage
+	a := e.request(t, privileged.TypeExec, "exec-1", clusterArgs("kubectl get nodes"))
+	a, _ = e.preflighted(t, a.ID)
+	e.approve(t, a.ID)
+	e.runExecutor(t)
+	if a = e.get(t, a.ID); a.State != privileged.StateFailed || !strings.Contains(deref(a.LastError), "never ran") {
+		t.Fatalf("%+v (%v)", a, deref(a.LastError))
+	}
 }

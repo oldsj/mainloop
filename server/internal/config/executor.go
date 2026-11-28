@@ -62,11 +62,15 @@ type Executor struct {
 	UniFiAddress     netip.AddrPort `env:"-"`
 	// Toolbox turns on command.exec: scripts run in pods of ToolboxImage (pinned by digest) in
 	// ToolboxNamespace, through the executor's toolbox account.
-	Toolbox              ExactTrue `env:"MAINLOOP_EXECUTOR_TOOLBOX_ENABLED"`
-	ToolboxImage         string    `env:"MAINLOOP_EXECUTOR_TOOLBOX_IMAGE"`
-	ToolboxNamespace     string    `env:"MAINLOOP_EXECUTOR_TOOLBOX_NAMESPACE" envDefault:"mainloop-toolbox"`
-	ToolboxPullSecrets   string    `env:"MAINLOOP_EXECUTOR_TOOLBOX_PULL_SECRETS"`
-	ToolboxPullSecretSet []string  `env:"-"`
+	Toolbox            ExactTrue `env:"MAINLOOP_EXECUTOR_TOOLBOX_ENABLED"`
+	ToolboxImage       string    `env:"MAINLOOP_EXECUTOR_TOOLBOX_IMAGE"`
+	ToolboxNamespace   string    `env:"MAINLOOP_EXECUTOR_TOOLBOX_NAMESPACE" envDefault:"mainloop-toolbox"`
+	ToolboxPullSecrets string    `env:"MAINLOOP_EXECUTOR_TOOLBOX_PULL_SECRETS"`
+	// ToolboxProxyImage turns on cluster reach for command.exec: the image (by digest, the
+	// executor's own) of the kube proxy sidecar. It needs Kubernetes, whose admin account the
+	// proxy's token is minted for.
+	ToolboxProxyImage    string   `env:"MAINLOOP_EXECUTOR_TOOLBOX_PROXY_IMAGE"`
+	ToolboxPullSecretSet []string `env:"-"`
 }
 
 // toolboxImageRE is an image reference pinned by digest.
@@ -157,6 +161,14 @@ func ParseExecutor(vars map[string]string) (*Executor, error) {
 		}
 		if !dnsLabel.MatchString(e.ToolboxNamespace) || e.ToolboxNamespace == e.Namespace {
 			errs = append(errs, errors.New("MAINLOOP_EXECUTOR_TOOLBOX_NAMESPACE must be a namespace other than the executor's"))
+		}
+		if e.ToolboxProxyImage = strings.TrimSpace(e.ToolboxProxyImage); e.ToolboxProxyImage != "" {
+			if !e.Kubernetes {
+				errs = append(errs, errors.New("MAINLOOP_EXECUTOR_TOOLBOX_PROXY_IMAGE needs MAINLOOP_EXECUTOR_KUBERNETES_ENABLED"))
+			}
+			if len(e.ToolboxProxyImage) > 300 || !toolboxImageRE.MatchString(e.ToolboxProxyImage) {
+				errs = append(errs, errors.New("MAINLOOP_EXECUTOR_TOOLBOX_PROXY_IMAGE must be an image reference pinned by digest (name@sha256:...)"))
+			}
 		}
 		for _, s := range strings.Split(e.ToolboxPullSecrets, ",") {
 			if s = strings.TrimSpace(s); s == "" {
