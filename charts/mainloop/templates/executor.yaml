@@ -6,6 +6,11 @@
 {{- range .secretNamespaces }}
 {{- if or (eq . $.Values.executor.namespace) (eq . $.Release.Namespace) }}{{ fail (printf "executor.secretNamespaces must not hold the executor's or the release's namespace (%s)" .) }}{{ end }}
 {{- end }}
+{{- /* How an executor type is approved is chosen, never defaulted: dropping the keys must not fall back to web approvals. */}}
+{{- if hasKey .approvalKeys "required" }}{{ fail "executor.approvalKeys.required was replaced by executor.approvals.mode: signed" }}{{ end }}
+{{- if not (has .approvals.mode (list "web" "signed")) }}{{ fail "executor.approvals.mode must be set to web or signed when executor.enabled: web approves from the web app with no Touch ID signature, signed runs only approvals a pinned phone signed" }}{{ end }}
+{{- if and (eq .approvals.mode "signed") (not .approvalKeys.pinned) }}{{ fail "executor.approvals.mode signed needs a key in executor.approvalKeys.pinned" }}{{ end }}
+{{- if and (eq .approvals.mode "web") .approvalKeys.pinned }}{{ fail "executor.approvals.mode web with executor.approvalKeys.pinned: pinned keys make the executor refuse the web app's approvals; set the mode to signed, or pin none" }}{{ end }}
 {{- $image := $.Values.images.backend }}
 {{- if .image.repository }}{{ $image = .image }}{{ end }}
 # serve-executor (docs/specs/privileged-actions.md): runs the privileged actions that need a
@@ -122,10 +127,8 @@ spec:
             - name: MAINLOOP_PRIVILEGED_APPROVAL_KEYS
               value: {{ toJson . | quote }}
             {{- end }}
-            {{- if .approvalKeys.required }}
-            - name: MAINLOOP_PRIVILEGED_APPROVAL_KEYS_REQUIRED
-              value: "true"
-            {{- end }}
+            - name: MAINLOOP_PRIVILEGED_APPROVALS_MODE
+              value: {{ .approvals.mode | quote }}
             {{- if .ssh.enabled }}
             {{- if not .ssh.hosts }}
             {{- fail "executor.ssh.hosts must name a host when executor.ssh.enabled is true" }}

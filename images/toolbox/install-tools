@@ -1,0 +1,117 @@
+#!/bin/bash
+# Installs the toolbox's binaries, each download checked against a pinned sha256 for the image's
+# architecture. kubectl, talosctl and omnictl carry the same versions and checksums as
+# server/Dockerfile (check-pins keeps them equal). Adding a tool means adding its pin here, its
+# --version line to smoke.sh and a row to docs/specs/privileged-actions.md.
+# shellcheck disable=SC2312
+set -euo pipefail
+arch=$(dpkg --print-architecture)
+case "${arch}" in
+amd64 | arm64) ;;
+*)
+	echo "the toolbox builds for amd64 and arm64, not ${arch}" >&2
+	exit 1
+	;;
+esac
+# pick <amd64 value> <arm64 value>
+pick() { if [[ ${arch} == amd64 ]]; then echo "$1"; else echo "$2"; fi; }
+
+scratch=$(mktemp -d)
+trap 'rm -rf "$scratch"' EXIT
+# fetch <url> <sha256> <file>: downloads into the scratch directory and checks the digest.
+fetch() {
+	curl --fail --silent --show-error --location --connect-timeout 10 --max-time 300 --retry 2 "$1" -o "${scratch}/$3"
+	echo "$2  ${scratch}/$3" | sha256sum --check --strict
+}
+# extract <file> <member> [<install name>]: installs one member of a tarball under /usr/local/bin.
+extract() {
+	local dir="${scratch}/x-$1"
+	mkdir -p "${dir}"
+	tar -xzf "${scratch}/$1" -C "${dir}"
+	install -m 0555 "${dir}/$2" "/usr/local/bin/${3:-$(basename "$2")}"
+}
+: >/usr/local/share/toolbox/versions
+record() { echo "$1=$2" >>/usr/local/share/toolbox/versions; }
+
+# Same pins as server/Dockerfile.
+KUBECTL_VERSION=v1.37.2
+fetch "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${arch}/kubectl" \
+	"$(pick c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4 fcc16f63186659d9722014b7e02d5fdd2d4e669cb8c0ab66365d7d3b8ba03509)" kubectl
+install -m 0555 "${scratch}/kubectl" /usr/local/bin/kubectl
+record kubectl "${KUBECTL_VERSION}"
+
+OMNICTL_VERSION=v1.13.1
+fetch "https://github.com/siderolabs/omni/releases/download/${OMNICTL_VERSION}/omnictl-linux-${arch}" \
+	"$(pick fce94ffb14c2ae233085ca93e518b5c50a00ab1a7461fa6475f686ebc9fae90f 2474f32d9cf0f8fd709fd478dbaf8c8dfee89f556d4830d8381cf11b6403ecd3)" omnictl
+install -m 0555 "${scratch}/omnictl" /usr/local/bin/omnictl
+record omnictl "${OMNICTL_VERSION}"
+
+TALOSCTL_VERSION=v1.14.5
+fetch "https://github.com/siderolabs/talos/releases/download/${TALOSCTL_VERSION}/talosctl-linux-${arch}" \
+	"$(pick ff432b68986709e6b69c563a08a2ced4232d5196b0dccd6d2e783e9d714d7d7d dfd3aa33c3159810e216fc39afb685d4d120c8f2728e017d8c7f7635d3139382)" talosctl
+install -m 0555 "${scratch}/talosctl" /usr/local/bin/talosctl
+record talosctl "${TALOSCTL_VERSION}"
+
+HELM_VERSION=v4.3.2
+fetch "https://get.helm.sh/helm-${HELM_VERSION}-linux-${arch}.tar.gz" \
+	"$(pick d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983 df31cb61680ef728f82c770e5280dd565617bee6b039d37e85c677288be4bbb0)" helm.tgz
+extract helm.tgz "linux-${arch}/helm"
+record helm "${HELM_VERSION}"
+
+KUSTOMIZE_VERSION=v5.8.3
+fetch "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_${arch}.tar.gz" \
+	"$(pick cb9e31198d3f63b44848bd0afc4c8efc56e6cfef9c93a4a39a211940e6decd61 9867b76482cfc6d25b546abc1d2b5a32bd137505aba640649b4b378f64f6d68f)" kustomize.tgz
+extract kustomize.tgz kustomize
+record kustomize "${KUSTOMIZE_VERSION}"
+
+CILIUM_VERSION=v0.20.3
+fetch "https://github.com/cilium/cilium-cli/releases/download/${CILIUM_VERSION}/cilium-linux-${arch}.tar.gz" \
+	"$(pick b987ad0d195310d3fc96553aa7bcd41d1e97b64713ecdfee3eb48dd27e1ec7d7 fa1bd66b407ec205e88746fc0b17590a247f255bf71bb9dfb0008b14d158f68d)" cilium.tgz
+extract cilium.tgz cilium
+record cilium "${CILIUM_VERSION}"
+
+# crane inspects, copies and tags images with no daemon and no privileges; builds stay in CI.
+CRANE_VERSION=v0.22.1
+fetch "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_$(pick x86_64 arm64).tar.gz" \
+	"$(pick 0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0 898c0cff975f898a33e8c4580bdafb0e7c02c7faa33374e946762f97c4ab7110)" crane.tgz
+extract crane.tgz crane
+record crane "${CRANE_VERSION}"
+
+YQ_VERSION=v4.54.3
+fetch "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${arch}" \
+	"$(pick 129534601871538efe0ba4c5e62a34fb1d5f469bcb975c4fddeb467d82974973 89f69310b61b68d1245065a1241d1fc843f7a36cd6103ffd77ad987613bd1b67)" yq
+install -m 0555 "${scratch}/yq" /usr/local/bin/yq
+record yq "${YQ_VERSION}"
+
+GH_VERSION=2.106.0
+fetch "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.tar.gz" \
+	"$(pick a476449fa9625413c54a3734eded62e9e480e49f421ff08e7f3b3879c059a033 5e8a0c51e1a8345f36bd0b8bb88604b6a5388df16f3ab3e3b9b6d794fa223a67)" gh.tgz
+extract gh.tgz "gh_${GH_VERSION}_linux_${arch}/bin/gh"
+record gh "${GH_VERSION}"
+
+FLYCTL_VERSION=0.5.19
+fetch "https://github.com/superfly/flyctl/releases/download/v${FLYCTL_VERSION}/flyctl_${FLYCTL_VERSION}_Linux_$(pick x86_64 arm64).tar.gz" \
+	"$(pick 403d14a46d495d112c98dcf42aacd397833f5e471eb2b6c6f42cde4bbca45a0a 461d00c87ae9f28c5644b86317798b6d5ca48b40757e00ceb1d176bdc1d9e129)" flyctl.tgz
+extract flyctl.tgz flyctl
+record flyctl "${FLYCTL_VERSION}"
+
+DOCTL_VERSION=2.11.0
+fetch "https://github.com/digitalocean/doctl/releases/download/v${DOCTL_VERSION}/doctl-${DOCTL_VERSION}-linux-${arch}.tar.gz" \
+	"$(pick 450bee1a6b7564971349992f7f57951635ad5cc62426ca0e0663bedb66dc3bfe cbd32db3b9c13ff75222b90156e9f934c7af93cac8b5bab39fd4600b24aa5388)" doctl.tgz
+extract doctl.tgz doctl
+record doctl "${DOCTL_VERSION}"
+
+UV_VERSION=0.13.10
+uv_target="uv-$(pick x86_64 aarch64)-unknown-linux-gnu"
+fetch "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${uv_target}.tar.gz" \
+	"$(pick bf65ac1a0af10f92c522d91ac096c7c0a39657647b155577e7836c2cbbb4526c 14590f644805a6234ffe071154340669e38137f38e60aa9629690119704107d2)" uv.tgz
+extract uv.tgz "${uv_target}/uv"
+extract uv.tgz "${uv_target}/uvx"
+record uv "${UV_VERSION}"
+
+NODE_VERSION=v26.13.1
+fetch "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-$(pick x64 arm64).tar.xz" \
+	"$(pick 5c063e46bab0fbc1c17cc445d7ff129cbdcd0471be6ed83b6ab864f8143bc864 89e1853138db51e8b82d3e98ba9c0d3f2956a28e5e55ea1b7e12d25aae92d5dd)" node.txz
+tar -xJf "${scratch}/node.txz" -C /usr/local --strip-components=1
+rm -rf /usr/local/include /usr/local/share/doc /usr/local/share/man /usr/local/CHANGELOG.md /usr/local/README.md /usr/local/LICENSE
+record node "${NODE_VERSION}"

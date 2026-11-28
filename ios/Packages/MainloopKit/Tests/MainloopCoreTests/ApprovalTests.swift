@@ -29,7 +29,7 @@ func actionDetailJSON(_ record: String) throws -> String {
             "id": "pa-0001", "type": "k8s.rollout_restart", "state": "pending_approval", "title": "Restart web",
             "requester_role": "worker", "requester_session_id": "sess-0001", "requester_task_id": "task-0001",
             "reason": "A fictional reason.", "created_at": "2026-11-24T23:00:00Z", "expires_at": "2026-11-24T23:30:00Z",
-            "decided_at": NSNull(), "finished_at": NSNull(), "decision_note": NSNull(), "last_error": NSNull(),
+            "decided_at": NSNull(), "finished_at": NSNull(), "decision_note": NSNull(), "approval_channel": NSNull(), "last_error": NSNull(),
         ] as [String: Any],
         "body": "A card the server could have written to say anything.", "args": [:] as [String: Any],
         "frozen_facts": NSNull(), "digest": NSNull(), "canonical_record": record, "result": NSNull(), "attempts": 0,

@@ -163,7 +163,7 @@ The web app's Settings has a **Devices** section that lists every device, revoke
 its name, platform, when it was registered and last seen (or never), its id and the start of its
 key's thumbprint (and of its approval key's, or "no approval key"), and **Active** or **Revoked**
 with the date. An active device with an approval key has **Pin its approval key for the
-executor**, which shows the entry to add to the chart's `executor.approvalKeys.pinned`. An active device has **Revoke**,
+executor**, which shows the entry to add to the chart's `executor.approvalKeys.pinned` (with `executor.approvals.mode: signed`). An active device has **Revoke**,
 which asks for confirmation, then reads the list again. A device the owner did not register can be
 seen and stopped there. An active device's facts also say whether it gets notifications: **on**,
 **off** (it set no APNs token), or **stopped** when Apple refused its token. The token itself is

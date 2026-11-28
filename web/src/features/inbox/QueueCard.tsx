@@ -119,6 +119,14 @@ export function QueueCard({ item }: { item: QueueItem }) {
         </a>
       ) : null}
 
+      {digest !== null && awaitingAnswer ? (
+        <p className="text-muted-foreground text-caption break-words">
+          {nativeApprove
+            ? 'Approve here signs with Touch ID, and is recorded as signed on a phone.'
+            : 'Approve here is recorded as approved from the web app (no Touch ID).'}
+        </p>
+      ) : null}
+
       {options.length > 0 ? (
         <div role="group" aria-label="Options" className="gap-xs flex flex-wrap">
           {options.map((option) => (

@@ -1,0 +1,137 @@
+name: Toolbox image
+
+# The image command.exec runs scripts in (docs/specs/privileged-actions.md, "command.exec"). Built
+# and smoke-tested on amd64 and arm64 on pull requests that touch it; published from main as
+# ghcr.io/oldsj/mainloop-toolbox:<short sha>, a multi-arch index. Deployments pin the index's
+# digest, which the merge job writes to the run summary. A mutable tag is never deployed.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - images/toolbox/**
+      - server/Dockerfile
+      - .github/workflows/toolbox-image.yml
+  push:
+    branches: [main]
+    paths:
+      - images/toolbox/**
+      - server/Dockerfile
+      - .github/workflows/toolbox-image.yml
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolbox-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and smoke test (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Pins match server/Dockerfile
+        run: images/toolbox/check-pins
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: images/toolbox/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: mainloop-toolbox:ci
+          cache-from: type=gha,scope=toolbox-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=toolbox-${{ matrix.arch }}
+
+      # Every tool starts and reports its pinned version, as the unprivileged user and with a
+      # read-only root, the way the executor runs it.
+      - name: Smoke test
+        run: |
+          docker run --rm --read-only --tmpfs /work:uid=65532,gid=65532 --cap-drop ALL \
+            --security-opt no-new-privileges \
+            -v "$PWD/images/toolbox/smoke.sh:/smoke.sh:ro" mainloop-toolbox:ci /smoke.sh
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: images/toolbox/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          push: true
+          tags: ghcr.io/oldsj/mainloop-toolbox:${{ github.sha }}-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=toolbox-${{ matrix.arch }}
+
+  # Joins the two native builds into one index under the commit's short tag, so a pod pulls the
+  # right one on arm64 and amd64 nodes, and records the index digest to pin.
+  merge:
+    name: Publish the multi-arch index
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Create the index
+        shell: bash
+        env:
+          IMAGE: ghcr.io/oldsj/mainloop-toolbox
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_SHA:0:7}"
+          docker buildx imagetools create --tag "$IMAGE:${tag}" \
+            "$IMAGE:${GITHUB_SHA}-amd64" "$IMAGE:${GITHUB_SHA}-arm64"
+          docker buildx imagetools inspect "$IMAGE:${tag}" --format '{{json .Manifest}}' \
+            | jq -e '[.manifests[].platform.architecture] | (index("amd64") and index("arm64"))' >/dev/null
+          digest=$(docker buildx imagetools inspect "$IMAGE:${tag}" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          {
+            printf '### %s:%s (linux/amd64, linux/arm64)\n\n' "$IMAGE" "$tag"
+            printf 'Source commit: `%s`\n\n' "$GITHUB_SHA"
+            printf 'Pin: `%s@%s`\n' "$IMAGE" "$digest"
+          } >> "$GITHUB_STEP_SUMMARY"

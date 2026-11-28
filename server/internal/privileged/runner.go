@@ -218,7 +218,10 @@ func (r *Runner) decide(ctx context.Context) error {
 			return err
 		}
 		for _, d := range rows {
-			detail := "the owner approved through the owner API, with the card's digest"
+			detail := "the owner approved, with the card's digest"
+			if d.ApprovalChannel != nil {
+				detail = "the owner approved " + ChannelText(*d.ApprovalChannel) + ", with the card's digest"
+			}
 			if d.State == StateDenied {
 				detail = "the owner denied"
 				if d.DecisionNote != nil {
@@ -585,6 +588,9 @@ func (r *Runner) deliver(ctx context.Context, row dbq.PrivilegedAction) error {
 func Message(row dbq.PrivilegedAction) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Privileged action %s (%s, request %s) ended: %s.", row.ID, row.Type, row.RequestID, row.State)
+	if row.ApprovalChannel != nil {
+		b.WriteString(" The owner approved it " + ChannelText(*row.ApprovalChannel) + ".")
+	}
 	switch row.State {
 	case StateDenied:
 		if row.DecisionNote != nil {

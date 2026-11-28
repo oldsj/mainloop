@@ -36,7 +36,7 @@ UPDATE privileged_actions
 SET state = 'cancelled', finished_at = now(), updated_at = now()
 WHERE owner_id = $1 AND id = $2 AND requester_session_id = $3
   AND state IN ('requested', 'pending_approval')
-RETURNING id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at
+RETURNING id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at, approval_channel
 `
 
 type CancelPrivilegedActionParams struct {
@@ -81,6 +81,7 @@ func (q *Queries) CancelPrivilegedAction(ctx context.Context, arg CancelPrivileg
 		&i.DeliveryDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApprovalChannel,
 	)
 	return i, err
 }
@@ -99,7 +100,7 @@ WHERE id = (
     LIMIT 1
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at
+RETURNING id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at, approval_channel
 `
 
 type ClaimPrivilegedActionParams struct {
@@ -144,6 +145,7 @@ func (q *Queries) ClaimPrivilegedAction(ctx context.Context, arg ClaimPrivileged
 		&i.DeliveryDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApprovalChannel,
 	)
 	return i, err
 }
@@ -159,7 +161,7 @@ WHERE id = (
     LIMIT 1
     FOR UPDATE SKIP LOCKED
 )
-RETURNING id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at
+RETURNING id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at, approval_channel
 `
 
 type ClaimPrivilegedDeliveryParams struct {
@@ -203,6 +205,7 @@ func (q *Queries) ClaimPrivilegedDelivery(ctx context.Context, arg ClaimPrivileg
 		&i.DeliveryDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApprovalChannel,
 	)
 	return i, err
 }
@@ -259,6 +262,12 @@ UPDATE privileged_actions p
 SET state = CASE WHEN d.approve THEN 'approved' ELSE 'denied' END,
     decided_at = now(), updated_at = now(),
     approved_digest = CASE WHEN d.approve THEN p.digest END,
+    -- A phone's answer carries a token that serve-api verified and recorded with the answer;
+    -- anything else that approves came from the web app.
+    approval_channel = CASE WHEN d.approve THEN
+        CASE WHEN EXISTS (SELECT 1 FROM privileged_approvals pa WHERE pa.action_id = p.id)
+            THEN 'phone-signed' ELSE 'web' END
+    END,
     next_attempt_at = CASE WHEN d.approve THEN now() END,
     decision_note = CASE WHEN d.approve THEN NULL ELSE d.note END,
     finished_at = CASE WHEN d.approve THEN NULL ELSE now() END,
@@ -282,13 +291,14 @@ FROM (
       AND (a.detail ? 'response' OR a.state <> 'open')
 ) d
 WHERE p.id = d.id AND p.state = 'pending_approval'
-RETURNING p.id, p.state, p.decision_note
+RETURNING p.id, p.state, p.decision_note, p.approval_channel
 `
 
 type DecideAnsweredPrivilegedActionsRow struct {
-	ID           string
-	State        string
-	DecisionNote *string
+	ID              string
+	State           string
+	DecisionNote    *string
+	ApprovalChannel *string
 }
 
 // Records the owner's answers. Approve counts only with this action's digest in the answer's
@@ -303,7 +313,12 @@ func (q *Queries) DecideAnsweredPrivilegedActions(ctx context.Context, ownerID s
 	items := []DecideAnsweredPrivilegedActionsRow{}
 	for rows.Next() {
 		var i DecideAnsweredPrivilegedActionsRow
-		if err := rows.Scan(&i.ID, &i.State, &i.DecisionNote); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.State,
+			&i.DecisionNote,
+			&i.ApprovalChannel,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -386,7 +401,7 @@ SET state = 'preflight_failed', last_error = $1, finished_at = now(), updated_at
     delivery_state = CASE WHEN $2::boolean THEN 'pending' ELSE 'none' END,
     delivery_next_at = CASE WHEN $2::boolean THEN now() END
 WHERE id = $3 AND state = 'requested'
-RETURNING id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at
+RETURNING id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at, approval_channel
 `
 
 type FailPrivilegedPreflightParams struct {
@@ -431,6 +446,7 @@ func (q *Queries) FailPrivilegedPreflight(ctx context.Context, arg FailPrivilege
 		&i.DeliveryDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApprovalChannel,
 	)
 	return i, err
 }
@@ -514,7 +530,7 @@ UPDATE privileged_actions
 SET frozen_facts = $1, digest = $2, state = 'pending_approval',
     last_error = NULL, updated_at = now()
 WHERE id = $3 AND state = 'requested'
-RETURNING id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at
+RETURNING id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at, approval_channel
 `
 
 type FreezePrivilegedActionParams struct {
@@ -559,12 +575,13 @@ func (q *Queries) FreezePrivilegedAction(ctx context.Context, arg FreezePrivileg
 		&i.DeliveryDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApprovalChannel,
 	)
 	return i, err
 }
 
 const getOpenPrivilegedActionByArgs = `-- name: GetOpenPrivilegedActionByArgs :one
-SELECT id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at FROM privileged_actions
+SELECT id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at, approval_channel FROM privileged_actions
 WHERE requester_session_id = $1 AND args_key = $2
   AND state IN ('requested', 'pending_approval')
 `
@@ -609,12 +626,13 @@ func (q *Queries) GetOpenPrivilegedActionByArgs(ctx context.Context, arg GetOpen
 		&i.DeliveryDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApprovalChannel,
 	)
 	return i, err
 }
 
 const getPrivilegedAction = `-- name: GetPrivilegedAction :one
-SELECT id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at FROM privileged_actions WHERE owner_id = $1 AND id = $2
+SELECT id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at, approval_channel FROM privileged_actions WHERE owner_id = $1 AND id = $2
 `
 
 type GetPrivilegedActionParams struct {
@@ -657,12 +675,13 @@ func (q *Queries) GetPrivilegedAction(ctx context.Context, arg GetPrivilegedActi
 		&i.DeliveryDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApprovalChannel,
 	)
 	return i, err
 }
 
 const getPrivilegedActionByRequest = `-- name: GetPrivilegedActionByRequest :one
-SELECT id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at FROM privileged_actions
+SELECT id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at, approval_channel FROM privileged_actions
 WHERE requester_session_id = $1 AND request_id = $2
 `
 
@@ -706,6 +725,7 @@ func (q *Queries) GetPrivilegedActionByRequest(ctx context.Context, arg GetPrivi
 		&i.DeliveryDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApprovalChannel,
 	)
 	return i, err
 }
@@ -720,7 +740,7 @@ INSERT INTO privileged_actions (
     $9, $10, $11, 'requested', $12
 )
 ON CONFLICT DO NOTHING
-RETURNING id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at
+RETURNING id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at, approval_channel
 `
 
 type InsertPrivilegedActionParams struct {
@@ -788,6 +808,7 @@ func (q *Queries) InsertPrivilegedAction(ctx context.Context, arg InsertPrivileg
 		&i.DeliveryDetail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ApprovalChannel,
 	)
 	return i, err
 }
@@ -839,7 +860,7 @@ func (q *Queries) ListPrivilegedActionEvents(ctx context.Context, actionID strin
 }
 
 const listRecentPrivilegedActions = `-- name: ListRecentPrivilegedActions :many
-SELECT id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at FROM privileged_actions WHERE owner_id = $1
+SELECT id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at, approval_channel FROM privileged_actions WHERE owner_id = $1
 ORDER BY created_at DESC, id DESC
 LIMIT 100
 `
@@ -886,6 +907,7 @@ func (q *Queries) ListRecentPrivilegedActions(ctx context.Context, ownerID strin
 			&i.DeliveryDetail,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ApprovalChannel,
 		); err != nil {
 			return nil, err
 		}
@@ -898,7 +920,7 @@ func (q *Queries) ListRecentPrivilegedActions(ctx context.Context, ownerID strin
 }
 
 const listUncardedPrivilegedActions = `-- name: ListUncardedPrivilegedActions :many
-SELECT p.id, p.owner_id, p.request_id, p.requester_role, p.requester_session_id, p.requester_task_id, p.type, p.version, p.args, p.args_key, p.reason, p.state, p.expires_at, p.preflight_attempts, p.frozen_facts, p.digest, p.decided_at, p.decision_note, p.approved_digest, p.attempts, p.claimed_until, p.next_attempt_at, p.result, p.last_error, p.finished_at, p.delivery_state, p.delivery_attempts, p.delivery_next_at, p.delivery_detail, p.created_at, p.updated_at FROM privileged_actions p
+SELECT p.id, p.owner_id, p.request_id, p.requester_role, p.requester_session_id, p.requester_task_id, p.type, p.version, p.args, p.args_key, p.reason, p.state, p.expires_at, p.preflight_attempts, p.frozen_facts, p.digest, p.decided_at, p.decision_note, p.approved_digest, p.attempts, p.claimed_until, p.next_attempt_at, p.result, p.last_error, p.finished_at, p.delivery_state, p.delivery_attempts, p.delivery_next_at, p.delivery_detail, p.created_at, p.updated_at, p.approval_channel FROM privileged_actions p
 WHERE p.owner_id = $1 AND p.state = 'pending_approval'
   AND NOT EXISTS (
       SELECT 1 FROM attention_items a
@@ -951,6 +973,7 @@ func (q *Queries) ListUncardedPrivilegedActions(ctx context.Context, ownerID str
 			&i.DeliveryDetail,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ApprovalChannel,
 		); err != nil {
 			return nil, err
 		}
@@ -963,7 +986,7 @@ func (q *Queries) ListUncardedPrivilegedActions(ctx context.Context, ownerID str
 }
 
 const listUnpreflightedPrivilegedActions = `-- name: ListUnpreflightedPrivilegedActions :many
-SELECT id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at FROM privileged_actions
+SELECT id, owner_id, request_id, requester_role, requester_session_id, requester_task_id, type, version, args, args_key, reason, state, expires_at, preflight_attempts, frozen_facts, digest, decided_at, decision_note, approved_digest, attempts, claimed_until, next_attempt_at, result, last_error, finished_at, delivery_state, delivery_attempts, delivery_next_at, delivery_detail, created_at, updated_at, approval_channel FROM privileged_actions
 WHERE owner_id = $1 AND state = 'requested' AND type = ANY ($2::text[])
   AND updated_at <= now() - make_interval(secs => CASE WHEN preflight_attempts = 0
       THEN $3::double precision ELSE $4::double precision END)
@@ -1027,6 +1050,7 @@ func (q *Queries) ListUnpreflightedPrivilegedActions(ctx context.Context, arg Li
 			&i.DeliveryDetail,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ApprovalChannel,
 		); err != nil {
 			return nil, err
 		}
@@ -1039,7 +1063,7 @@ func (q *Queries) ListUnpreflightedPrivilegedActions(ctx context.Context, arg Li
 }
 
 const listUnraisedUncertainPrivilegedActions = `-- name: ListUnraisedUncertainPrivilegedActions :many
-SELECT p.id, p.owner_id, p.request_id, p.requester_role, p.requester_session_id, p.requester_task_id, p.type, p.version, p.args, p.args_key, p.reason, p.state, p.expires_at, p.preflight_attempts, p.frozen_facts, p.digest, p.decided_at, p.decision_note, p.approved_digest, p.attempts, p.claimed_until, p.next_attempt_at, p.result, p.last_error, p.finished_at, p.delivery_state, p.delivery_attempts, p.delivery_next_at, p.delivery_detail, p.created_at, p.updated_at FROM privileged_actions p
+SELECT p.id, p.owner_id, p.request_id, p.requester_role, p.requester_session_id, p.requester_task_id, p.type, p.version, p.args, p.args_key, p.reason, p.state, p.expires_at, p.preflight_attempts, p.frozen_facts, p.digest, p.decided_at, p.decision_note, p.approved_digest, p.attempts, p.claimed_until, p.next_attempt_at, p.result, p.last_error, p.finished_at, p.delivery_state, p.delivery_attempts, p.delivery_next_at, p.delivery_detail, p.created_at, p.updated_at, p.approval_channel FROM privileged_actions p
 WHERE p.owner_id = $1 AND p.state = 'uncertain'
   AND NOT EXISTS (
       SELECT 1 FROM attention_items a
@@ -1092,6 +1116,7 @@ func (q *Queries) ListUnraisedUncertainPrivilegedActions(ctx context.Context, ow
 			&i.DeliveryDetail,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ApprovalChannel,
 		); err != nil {
 			return nil, err
 		}

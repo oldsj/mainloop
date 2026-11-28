@@ -169,5 +169,20 @@ func TestParseExecutorToolbox(t *testing.T) {
 	}
 	if e, err := config.ParseExecutor(map[string]string{"MAINLOOP_EXECUTOR_OP_TOKEN": "x"}); err != nil || e.Toolbox {
 		t.Fatalf("off by default: %+v (%v)", e, err)
+
+// The approval mode is exactly web or signed, or unset (which the processes refuse to start with
+// beside an executor): a mistyped value stops serve-executor instead of choosing one.
+func TestParseExecutorApprovalsMode(t *testing.T) {
+	for in, want := range map[string]config.ApprovalsMode{"": config.ApprovalsUnset, "web": config.ApprovalsWeb, "signed": config.ApprovalsSigned} {
+		e, err := config.ParseExecutor(map[string]string{"MAINLOOP_EXECUTOR_OP_TOKEN": "x", "MAINLOOP_PRIVILEGED_APPROVALS_MODE": in})
+		if err != nil || e.ApprovalsMode != want {
+			t.Errorf("%q: mode %q, %v", in, e.ApprovalsMode, err)
+		}
+	}
+	for _, bad := range []string{"Web", "true", "required", " signed", "web "} {
+		_, err := config.ParseExecutor(map[string]string{"MAINLOOP_EXECUTOR_OP_TOKEN": "x", "MAINLOOP_PRIVILEGED_APPROVALS_MODE": bad})
+		if err == nil || !strings.Contains(err.Error(), "MAINLOOP_PRIVILEGED_APPROVALS_MODE") {
+			t.Errorf("%q: %v", bad, err)
+		}
 	}
 }

@@ -5,12 +5,13 @@ import { BACK_LINK, BackIcon, PageHeader } from '@/components/shared/page-header
 import { cn } from '@/components/ui/cn';
 import { messageTime } from '@/lib/time';
 import {
+  CHANNEL,
   requester,
   STATE,
   type PrivilegedActionState,
   type PrivilegedActionSummary
 } from './model';
-import { usePrivilegedAction, usePrivilegedActions } from './queries';
+import { usePrivilegedAction, usePrivilegedActions, usePrivilegedApprovalMode } from './queries';
 
 const TONE = {
   open: 'text-status-working',
@@ -22,6 +23,29 @@ const TONE = {
 function StateLabel({ state }: { state: PrivilegedActionState }) {
   const s = STATE[state];
   return <span className={cn('text-caption flex-none font-medium', TONE[s.tone])}>{s.label}</span>;
+}
+
+/**
+ * Shown while the executor's actions are approved from the web app: nothing signs those approvals,
+ * so serve-api, or a stolen browser session, can approve an action itself. Pairing a phone and
+ * switching the chart to `signed` removes it.
+ */
+function UnsignedBanner() {
+  const mode = usePrivilegedApprovalMode();
+  if (mode.data?.mode !== 'web') return null;
+  return (
+    <p
+      role="note"
+      className="border-status-failed text-body p-md gap-xs flex flex-col border-l-4 break-words"
+    >
+      <span className="font-medium">Approvals run unsigned.</span>
+      <span className="text-muted-foreground">
+        The executor runs any approval this app records, with no Touch ID signature to check. A
+        compromised server or a stolen browser session could approve an action itself. Pair a phone
+        to turn this off.
+      </span>
+    </p>
+  );
 }
 
 /**
@@ -41,6 +65,7 @@ export function PrivilegedAuditPage() {
           </Link>
         }
       />
+      <UnsignedBanner />
       {actions.isPending ? (
         <p role="status" className="text-muted-foreground text-body">
           Loading…
@@ -81,6 +106,7 @@ function Row({ action: a }: { action: PrivilegedActionSummary }) {
         </span>
         <span className="text-muted-foreground text-caption">
           {requester(a)} · {messageTime(a.created_at)}
+          {a.approval_channel ? ` · ${CHANNEL[a.approval_channel]}` : ''}
         </span>
         {(a.last_error ?? a.decision_note) ? (
           <span className="text-muted-foreground text-caption [overflow-wrap:anywhere]">
@@ -117,7 +143,10 @@ export function PrivilegedActionPage({ id }: { id: string }) {
           pending={action.isFetching}
         />
       ) : (
-        <Detail d={action.data} />
+        <>
+          <UnsignedBanner />
+          <Detail d={action.data} />
+        </>
       )}
     </div>
   );
@@ -133,6 +162,7 @@ function Detail({ d }: { d: NonNullable<ReturnType<typeof usePrivilegedAction>['
     ['Asked', messageTime(a.created_at)],
     ['Expires', messageTime(a.expires_at)],
     ['Decided', a.decided_at ? messageTime(a.decided_at) : null],
+    ['Approved', a.approval_channel ? CHANNEL[a.approval_channel] : null],
     [
       'Signed',
       d.approval

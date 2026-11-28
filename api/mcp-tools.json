@@ -685,7 +685,7 @@
     },
     {
       "name": "get_privileged_action",
-      "description": "Read a privileged action you requested: its state, frozen facts (for k8s.patch and k8s.apply, the objects' names only, not the diffs), the owner's decision, the result and the audit events.",
+      "description": "Read a privileged action you requested: its state, frozen facts (for k8s.patch and k8s.apply, the objects' names only, not the diffs), the owner's decision and the channel it came through (approval_channel: web or phone-signed), the result and the audit events.",
       "input_schema": {
         "additionalProperties": false,
         "properties": {

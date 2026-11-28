@@ -37,6 +37,7 @@ const summary = (over: Partial<PrivilegedActionSummary>): PrivilegedActionSummar
   decided_at: '2026-11-20T10:05:00Z',
   finished_at: '2026-11-20T10:05:03Z',
   decision_note: null,
+  approval_channel: null,
   last_error: null,
   ...over
 });
@@ -80,7 +81,7 @@ function renderAt(path: string) {
 describe('privileged actions audit', () => {
   it('lists each action with its state, and opens one with its card and steps', async () => {
     const detail: PrivilegedActionDetail = {
-      action: summary({}),
+      action: summary({ approval_channel: 'phone-signed' }),
       body: 'Write key password of Secret widgets/widgets-db.',
       args: { namespace: 'widgets' },
       frozen_facts: {},
@@ -96,7 +97,12 @@ describe('privileged actions audit', () => {
       approval: { device_id: 'dev_0123456789abcdefghijklmnop', signed_at: '2026-11-20T10:05:00Z' }
     };
     server.use(
-      http.get(`${API_URL}/privileged-actions`, () => HttpResponse.json([summary({}), DENIED])),
+      http.get(`${API_URL}/privileged-actions/approval-mode`, () =>
+        HttpResponse.json({ mode: 'signed' })
+      ),
+      http.get(`${API_URL}/privileged-actions`, () =>
+        HttpResponse.json([summary({ approval_channel: 'phone-signed' }), DENIED])
+      ),
       http.get(`${API_URL}/privileged-actions/pa_1`, () => HttpResponse.json(detail))
     );
     renderAt('/privileged');
@@ -107,6 +113,8 @@ describe('privileged actions audit', () => {
     expect(within(rows[0]!).getByText('Done')).toBeInTheDocument();
     expect(within(rows[1]!).getByText('Denied')).toBeInTheDocument();
     expect(within(rows[1]!).getByText('Wait for the review.')).toBeInTheDocument();
+    expect(within(rows[0]!).getByText(/On a phone, signed with Touch ID/)).toBeInTheDocument();
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
 
     await userEvent.click(rows[0]!);
     expect(await screen.findByText('wrote the key')).toBeInTheDocument();
@@ -115,6 +123,35 @@ describe('privileged actions audit', () => {
     expect(
       screen.getByText(/^with Touch ID on dev_0123456789abcdefghijklmnop, /)
     ).toBeInTheDocument();
+    expect(screen.getByText('On a phone, signed with Touch ID')).toBeInTheDocument();
+  });
+
+  it('warns while approvals come from the web app, and shows how each was approved', async () => {
+    server.use(
+      http.get(`${API_URL}/privileged-actions/approval-mode`, () =>
+        HttpResponse.json({ mode: 'web' })
+      ),
+      http.get(`${API_URL}/privileged-actions`, () =>
+        HttpResponse.json([summary({ approval_channel: 'web' })])
+      )
+    );
+    renderAt('/privileged');
+
+    expect(await screen.findByRole('note')).toHaveTextContent('Approvals run unsigned.');
+    const list = await screen.findByRole('list', { name: 'Privileged actions' });
+    expect(within(list).getByText(/From the web app \(no Touch ID\)/)).toBeInTheDocument();
+  });
+
+  it('shows no warning with no executor', async () => {
+    server.use(
+      http.get(`${API_URL}/privileged-actions/approval-mode`, () =>
+        HttpResponse.json({ mode: null })
+      ),
+      http.get(`${API_URL}/privileged-actions`, () => HttpResponse.json([DENIED]))
+    );
+    renderAt('/privileged');
+    await screen.findByRole('list', { name: 'Privileged actions' });
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
   });
 
   it('says so when no agent has asked', async () => {

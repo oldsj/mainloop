@@ -341,19 +341,26 @@ executor:
     # prints it.
     # trunk-ignore(checkov/CKV_SECRET_6): the Secret's name, not a value
     keySecret: mainloop-executor-omni
+  # How the executor's action types are approved (docs/specs/privileged-actions.md, "Approval
+  # channels"). Chosen explicitly: with executor.enabled and no mode the chart refuses to render, so
+  # dropping the approval keys can't fall back to web approvals silently.
+  approvals:
+    # web: an executor type is approved from the web app, with no Touch ID signature for the
+    # executor to check. A compromised serve-api, or a stolen browser session, can approve an
+    # action itself. Both processes log UNSIGNED PRIVILEGED APPROVALS at start, and the audit page
+    # shows a banner. Takes no pinned key.
+    # signed: the executor runs only approvals a pinned phone signed with Touch ID, and serve-api
+    # refuses the web app's Approve of an executor type. Needs a key in approvalKeys.pinned; the
+    # chart refuses to render and either process refuses to start without one.
+    mode: ''
   # Touch ID-signed approvals (docs/specs/privileged-actions.md, "Signed approvals").
   approvalKeys:
-    # Refuse to render, and both processes refuse to start, without a pinned key: set it once a
-    # phone's key is pinned, so a values change that drops the keys fails closed instead of going
-    # back to unsigned approvals.
-    required: false
     # The phones' approval keys. Each is the public JWK Settings › Devices shows, with the device id
     # as kid:
     #   - {kid: dev_…, kty: EC, crv: P-256, x: …, y: …}
-    # With any pinned, the executor runs only actions whose approval one of these keys signed, and
-    # serve-api takes an approval of an executor type only from such a phone. Public keys, not
-    # secrets. With none (and not required), executor types are approved unsigned from the web
-    # app, and both processes log a warning at start.
+    # Pin them with approvals.mode signed: the executor then runs only actions whose approval one of
+    # these keys signed, and serve-api takes an approval of an executor type only from such a phone.
+    # Public keys, not secrets. approvals.mode web takes none.
     pinned: []
   # command.ssh. On, the executor runs one approved command at a time on a host listed here, over
   # ssh with a client of its own that accepts only the host's pinned key. Each host's credential is

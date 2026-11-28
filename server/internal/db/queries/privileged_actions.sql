@@ -120,6 +120,12 @@ UPDATE privileged_actions p
 SET state = CASE WHEN d.approve THEN 'approved' ELSE 'denied' END,
     decided_at = now(), updated_at = now(),
     approved_digest = CASE WHEN d.approve THEN p.digest END,
+    -- A phone's answer carries a token that serve-api verified and recorded with the answer;
+    -- anything else that approves came from the web app.
+    approval_channel = CASE WHEN d.approve THEN
+        CASE WHEN EXISTS (SELECT 1 FROM privileged_approvals pa WHERE pa.action_id = p.id)
+            THEN 'phone-signed' ELSE 'web' END
+    END,
     next_attempt_at = CASE WHEN d.approve THEN now() END,
     decision_note = CASE WHEN d.approve THEN NULL ELSE d.note END,
     finished_at = CASE WHEN d.approve THEN NULL ELSE now() END,
@@ -143,7 +149,7 @@ FROM (
       AND (a.detail ? 'response' OR a.state <> 'open')
 ) d
 WHERE p.id = d.id AND p.state = 'pending_approval'
-RETURNING p.id, p.state, p.decision_note;
+RETURNING p.id, p.state, p.decision_note, p.approval_channel;
 
 -- Expires undecided actions past their expiry, and approved ones no execution claimed within
 -- claim_seconds of the approval.

@@ -119,7 +119,7 @@ func (s *Server) privilegedTools() []Tool {
 		Handle: s.requestPrivilegedAction,
 	}, {
 		Name:        agentauth.ToolGetPrivilegedAction,
-		Description: "Read a privileged action you requested: its state, frozen facts (for k8s.patch and k8s.apply, the objects' names only, not the diffs), the owner's decision, the result and the audit events.",
+		Description: "Read a privileged action you requested: its state, frozen facts (for k8s.patch and k8s.apply, the objects' names only, not the diffs), the owner's decision and the channel it came through (approval_channel: web or phone-signed), the result and the audit events.",
 		InputSchema: objectSchema(map[string]any{"action_id": str(1, 100)}, "action_id"),
 		Handle:      s.getPrivilegedAction,
 	}, {
@@ -249,6 +249,9 @@ func privilegedResult(act privileged.Action, evs []dbq.PrivilegedActionEvent) Re
 			b.WriteString(" Detail: " + *act.LastError)
 		}
 	}
+	if act.ApprovalChannel != nil {
+		b.WriteString(" The owner approved it " + privileged.ChannelText(*act.ApprovalChannel) + ".")
+	}
 	if act.Replayed {
 		b.WriteString(" (An earlier request with the same request_id or arguments.)")
 	}
@@ -271,6 +274,9 @@ func privilegedResult(act privileged.Action, evs []dbq.PrivilegedActionEvent) Re
 	}
 	if act.DecisionNote != nil {
 		m["decision_note"] = *act.DecisionNote
+	}
+	if act.ApprovalChannel != nil {
+		m["approval_channel"] = *act.ApprovalChannel
 	}
 	if act.LastError != nil {
 		m["last_error"] = *act.LastError

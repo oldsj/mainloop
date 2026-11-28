@@ -42,42 +42,42 @@ var installs = map[string]struct {
 	"production-canary": {"mainloop", "ci/production-values.yaml", []string{"canary.enabled=true"}},
 	// Production with serve-executor on (docs/specs/privileged-actions.md).
 	"production-executor": {"mainloop", "ci/production-values.yaml", []string{
-		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.secretNamespaces={widgets,billing}",
+		"executor.enabled=true", "executor.approvals.mode=web", "executor.namespace=mainloop-executor", "executor.secretNamespaces={widgets,billing}",
 	}},
 	// The same, with the typed Kubernetes actions on.
 	"production-executor-kubernetes": {"mainloop", "ci/production-values.yaml", []string{
-		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.kubernetes.enabled=true",
+		"executor.enabled=true", "executor.approvals.mode=web", "executor.namespace=mainloop-executor", "executor.kubernetes.enabled=true",
 		"executor.kubernetes.clusterName=internal-01",
 	}},
 	// The same, with omnictl and talosctl on.
 	"production-executor-omni": {"mainloop", "ci/production-values.yaml", []string{
-		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.omni.enabled=true",
+		"executor.enabled=true", "executor.approvals.mode=web", "executor.namespace=mainloop-executor", "executor.omni.enabled=true",
 		"executor.omni.endpoint=https://omni.example.com", "executor.omni.clusters={internal-01,lab-02}",
 	}},
 	// The same, with command.ssh on for two hosts.
 	"production-executor-ssh": {"mainloop", "ci/production-values.yaml", []string{
-		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.ssh.enabled=true",
+		"executor.enabled=true", "executor.approvals.mode=web", "executor.namespace=mainloop-executor", "executor.ssh.enabled=true",
 		"executor.ssh.hosts[0].name=nas-01", "executor.ssh.hosts[0].address=192.0.2.20:22",
 		"executor.ssh.hosts[1].name=router", "executor.ssh.hosts[1].address=192.0.2.1:2222",
 	}},
 	// The same, with command.exec on (Kubernetes access is what mints the toolbox account's token).
 	"production-executor-toolbox": {"mainloop", "ci/production-values.yaml", []string{
 		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.kubernetes.enabled=true",
-		"executor.kubernetes.clusterName=internal-01", "executor.toolbox.enabled=true",
+		"executor.kubernetes.clusterName=internal-01", "executor.approvals.mode=web", "executor.toolbox.enabled=true",
 		"executor.toolbox.image=ghcr.io/oldsj/mainloop-toolbox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		"executor.toolbox.imagePullSecrets={ghcr-pull}",
 	}},
 	// The same, with http.unifi on.
 	"production-executor-unifi": {"mainloop", "ci/production-values.yaml", []string{
-		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.unifi.enabled=true",
+		"executor.enabled=true", "executor.approvals.mode=web", "executor.namespace=mainloop-executor", "executor.unifi.enabled=true",
 		"executor.unifi.address=192.0.2.2:443",
 	}},
-	// Production with serve-executor on and a phone's approval key pinned and required.
+	// Production with serve-executor on, a phone's approval key pinned and the signed mode.
 	"production-executor-approvals": {"mainloop", "ci/production-values.yaml", []string{
-		"executor.enabled=true", "executor.namespace=mainloop-executor",
+		"executor.enabled=true", "executor.approvals.mode=signed", "executor.namespace=mainloop-executor",
 		"executor.approvalKeys.pinned[0].kid=dev_0123456789abcdefghijklmnop", "executor.approvalKeys.pinned[0].kty=EC",
 		"executor.approvalKeys.pinned[0].crv=P-256", "executor.approvalKeys.pinned[0].x=VBY4eEqK2i_pljz6fJ7BYbPqbMOb-ZFPzBXzI1_w1mM",
-		"executor.approvalKeys.pinned[0].y=YNqLInY0XbP0fGgecdIgsmrHXiY9zDnuNAG4ozmCWgQ", "executor.approvalKeys.required=true",
+		"executor.approvalKeys.pinned[0].y=YNqLInY0XbP0fGgecdIgsmrHXiY9zDnuNAG4ozmCWgQ",
 	}},
 	// Production with Apple push on (docs/specs/push-notifications.md).
 	"production-apns": {"mainloop", "ci/production-values.yaml", []string{

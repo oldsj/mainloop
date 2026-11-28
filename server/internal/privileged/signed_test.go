@@ -166,6 +166,13 @@ func TestAPinnedPhoneApprovesAndTheExecutorRuns(t *testing.T) {
 	if got := detail.Approval; got == nil || got.DeviceId != p.id {
 		t.Fatalf("audit approval = %+v", got)
 	}
+	// A phone's signed answer records the phone-signed channel, in the audit and the agent's data.
+	if ch := detail.Action.ApprovalChannel; ch == nil || *ch != api.PrivilegedApprovalChannelPhoneSigned {
+		t.Fatalf("audit channel = %v", ch)
+	}
+	if got := e.get(t, a.ID); got.ApprovalChannel == nil || *got.ApprovalChannel != privileged.ChannelPhoneSigned {
+		t.Fatalf("action channel = %v", got.ApprovalChannel)
+	}
 	// The record the phone hashes and shows is the one the digest covers.
 	if detail.CanonicalRecord == nil || detail.Digest == nil {
 		t.Fatalf("record %v, digest %v", detail.CanonicalRecord, detail.Digest)

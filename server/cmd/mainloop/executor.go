@@ -71,8 +71,8 @@ func serveExecutor(ctx context.Context, log *slog.Logger) error {
 	if svc.ApprovalKeys, err = approval.ParsePinned(cfg.ApprovalKeys); err != nil {
 		return err
 	}
-	svc.ApprovalsRequired = bool(cfg.ApprovalKeysRequired)
-	if err := checkApprovalKeys(log, true, svc.ApprovalsRequired, svc.ApprovalKeys); err != nil {
+	svc.ApprovalsRequired = cfg.ApprovalsMode == config.ApprovalsSigned
+	if err := checkApprovalKeys(log, true, cfg.ApprovalsMode, svc.ApprovalKeys); err != nil {
 		return err
 	}
 	if cfg.SSH {
@@ -96,7 +96,7 @@ func serveExecutor(ctx context.Context, log *slog.Logger) error {
 		"toolbox", bool(cfg.Toolbox), "toolbox_image", cfg.ToolboxImage,
 		"kubernetes", bool(cfg.Kubernetes), "namespace", cfg.Namespace, "omni", bool(cfg.Omni), "omni_clusters", cfg.OmniClusters,
 		"ssh_hosts", svc.SSHHosts, "unifi", bool(cfg.UniFi),
-		"pinned_approval_keys", len(svc.ApprovalKeys), "approval_keys_required", svc.ApprovalsRequired)
+		"pinned_approval_keys", len(svc.ApprovalKeys), "approvals_mode", string(cfg.ApprovalsMode))
 	t := time.NewTicker(executorEvery)
 	defer t.Stop()
 	for {

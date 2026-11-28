@@ -39,8 +39,8 @@ func newApprovals(cfg *config.Config, log *slog.Logger) (*approval.Checker, erro
 	if err != nil {
 		return nil, err
 	}
-	required := bool(cfg.PrivilegedApprovalKeysRequired)
-	if err := checkApprovalKeys(log, bool(cfg.PrivilegedExecutorEnabled), required, pinned); err != nil {
+	mode := cfg.PrivilegedApprovalsMode
+	if err := checkApprovalKeys(log, bool(cfg.PrivilegedExecutorEnabled), mode, pinned); err != nil {
 		return nil, err
 	}
 	executor := map[string]bool{}
@@ -49,19 +49,26 @@ func newApprovals(cfg *config.Config, log *slog.Logger) (*approval.Checker, erro
 	}
 	return &approval.Checker{
 		OwnerID: cfg.Identity.OwnerID, Audience: strings.ToLower(cfg.FrontendOrigin()),
-		Pinned: pinned, Required: required, ExecutorTypes: executor,
+		Pinned: pinned, Required: mode == config.ApprovalsSigned, ExecutorTypes: executor,
 	}, nil
 }
 
-// checkApprovalKeys refuses to start when signed approvals are required and no approval key is
-// pinned (fail closed), and warns at every start when an executor runs approvals no phone signed.
-// serve-api and serve-executor both call it with the same values.
-func checkApprovalKeys(log *slog.Logger, executor, required bool, pinned approval.Pinned) error {
+// checkApprovalKeys fails closed on the approval settings both processes start with. An executor
+// needs its mode chosen (web or signed), so dropping the keys can't quietly fall back to web
+// approvals; signed needs a pinned key; web must pin none, as a pinned key would make the executor
+// refuse the web app's approvals the mode promises. In web mode with an executor it warns at every
+// start: the executor runs approvals no phone signed. serve-api and serve-executor both call it
+// with the same values.
+func checkApprovalKeys(log *slog.Logger, executor bool, mode config.ApprovalsMode, pinned approval.Pinned) error {
 	switch {
-	case required && len(pinned) == 0:
-		return errors.New("signed approvals are required (MAINLOOP_PRIVILEGED_APPROVAL_KEYS_REQUIRED) and MAINLOOP_PRIVILEGED_APPROVAL_KEYS pins no key")
-	case executor && len(pinned) == 0:
-		log.Warn("UNSIGNED PRIVILEGED APPROVALS: no Touch ID approval key is pinned, so the executor runs any approval serve-api records, including the web app's; pin keys in executor.approvalKeys.pinned and set executor.approvalKeys.required")
+	case mode == config.ApprovalsUnset && executor:
+		return errors.New("MAINLOOP_PRIVILEGED_APPROVALS_MODE must be set to web or signed when an executor is deployed")
+	case mode == config.ApprovalsSigned && len(pinned) == 0:
+		return errors.New("signed approvals are required (MAINLOOP_PRIVILEGED_APPROVALS_MODE=signed) and MAINLOOP_PRIVILEGED_APPROVAL_KEYS pins no key")
+	case mode == config.ApprovalsWeb && len(pinned) > 0:
+		return errors.New("MAINLOOP_PRIVILEGED_APPROVALS_MODE=web pins approval keys in MAINLOOP_PRIVILEGED_APPROVAL_KEYS; set the mode to signed, or pin none")
+	case mode == config.ApprovalsWeb && executor:
+		log.Warn("UNSIGNED PRIVILEGED APPROVALS: the approval mode is web, so the executor runs any approval serve-api records, including the web app's, with no Touch ID signature to check; pin a phone's key in executor.approvalKeys.pinned and set executor.approvals.mode to signed")
 	}
 	return nil
 }
