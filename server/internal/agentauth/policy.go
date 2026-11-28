@@ -106,6 +106,8 @@ type Actor struct {
 	Depth int
 	// MergeStatusOnly marks the actor of a completed task: it may only look at merge status.
 	MergeStatusOnly bool
+	// AgentNamespace and AgentName are the kagent Agent the binding runs on; empty when unknown.
+	AgentNamespace, AgentName string
 	// WebFetch is set when the owner turned on the open-web web_fetch tool for this agent: its
 	// session's flag, or the flag of the task it runs (docs/specs/web-fetch.md).
 	WebFetch bool
@@ -138,6 +140,15 @@ type Policy struct {
 	// Screenshots turns preview_screenshot on for workspace agents: set when a headless browser and
 	// a preview base URL are configured.
 	Screenshots bool
+	// LockedAutoAgents are the kagent Agents ("namespace/name") declared to run Claude's auto
+	// permission mode, locked (MAINLOOP_LOCKED_AUTO_AGENTS).
+	LockedAutoAgents []string
+}
+
+// LockedAuto reports whether the actor's session runs on an Agent declared locked auto. An actor
+// whose Agent is unknown is not.
+func (p Policy) LockedAuto(a Actor) bool {
+	return a.AgentName != "" && slices.Contains(p.LockedAutoAgents, a.AgentNamespace+"/"+a.AgentName)
 }
 
 var (

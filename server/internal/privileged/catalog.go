@@ -65,6 +65,10 @@ type entry struct {
 	unifi bool
 	// toolbox types need the executor's toolbox (executor.toolbox in the chart).
 	toolbox bool
+	// lockedAuto types are requestable only by a session whose Agent runs auto permission mode,
+	// locked: an unattended approval-less run must never be asked for from a session that can be
+	// switched to bypass.
+	lockedAuto bool
 	// how is the card's line on what Approve does and through which credential.
 	how string
 	// normalize validates raw arguments and returns their canonical value.
@@ -139,7 +143,7 @@ var catalog = map[string]entry{
 		normalize: normalizeSSH, facts: SSHFacts{}, preflight: preflightSSH,
 	},
 	TypeExec: {
-		version: 1, expiry: UndecidedExpiry, expiryFor: execExpiry, executor: true, toolbox: true,
+		version: 1, expiry: UndecidedExpiry, expiryFor: execExpiry, executor: true, toolbox: true, lockedAuto: true,
 		how: "Approve runs exactly this script once, in a fresh single-use pod of the toolbox image that holds none of Mainloop's credentials " +
 			"and reaches the internet only. Nothing previews it, and nothing limits what the script does inside the pod.",
 		normalize: normalizeExec, facts: ExecFacts{}, preflight: preflightExec,

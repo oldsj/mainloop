@@ -107,7 +107,8 @@ func (s *Server) privilegedTools() []Tool {
 			"the image's digest and the reach, with a tag when a word scan sees a delete (the card then expires in an hour) or an " +
 			"install; nothing can preview it. You get the exit code and the output (stdout and stderr together, redacted, 64 KiB). " +
 			"A script that ran past its timeout or whose outcome was lost is uncertain, never run again. It answers unavailable " +
-			"where the executor has no toolbox. " +
+			"where the executor has no toolbox. It is granted only to a session whose Agent runs auto permission mode, locked " +
+			"(MAINLOOP_LOCKED_AUTO_AGENTS); any other session is refused unsupported_action. " +
 			"An executor type returns state requested; its card opens once the executor has checked the target. Reuse request_id to read the same request back. At most 3 requests per session " +
 			"and 10 in all wait for the owner.",
 		InputSchema: objectSchema(map[string]any{
@@ -154,7 +155,7 @@ func (s *Server) requestPrivilegedAction(ctx context.Context, a agentauth.Actor,
 	if err != nil {
 		return Result{}, err
 	}
-	by := privileged.Requester{Role: string(a.Role), SessionID: a.BindingID}
+	by := privileged.Requester{Role: string(a.Role), SessionID: a.BindingID, LockedAuto: s.Policy.LockedAuto(a)}
 	if a.Role == dbstate.RoleSupervisor {
 		p, err := s.taskPrincipal(ctx, a)
 		if err != nil {

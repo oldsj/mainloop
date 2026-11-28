@@ -71,7 +71,7 @@ func serveMCP(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		Auth:                 &agentauth.Authenticator{Q: q, Depth: taskSvc.AuthDepth},
 		Tasks:                taskSvc,
 		Transcripts:          transcripts.NewService(cfg, pool, transcripts.FromClient(kc), nil, log), // reads only; serve-api ingests
-		Policy:               agentauth.Policy{MergeTools: bool(cfg.MergeToolsEnabled), DevLoop: bool(cfg.DevloopEnabled)},
+		Policy:               agentauth.Policy{MergeTools: bool(cfg.MergeToolsEnabled), DevLoop: bool(cfg.DevloopEnabled), LockedAutoAgents: lockedAutoAgents(cfg)},
 		Queries:              q,
 		Topics:               topics.NewService(pool),
 		Pool:                 pool,
@@ -141,4 +141,18 @@ func registerCredentials(cfg *config.Config, creds *agentauth.Credentials, runne
 	if cfg.InCluster() {
 		creds.Register(runner)
 	}
+}
+
+// lockedAutoAgents is the Agents declared to run Claude's auto permission mode, locked, as
+// "namespace/name"; a bare name is in the kagent namespace.
+func lockedAutoAgents(cfg *config.Config) []string {
+	out := make([]string, 0, len(cfg.Kagent.LockedAutoAgents))
+	for _, a := range cfg.Kagent.LockedAutoAgents {
+		ns := a.Namespace
+		if ns == "" {
+			ns = cfg.Kagent.Namespace
+		}
+		out = append(out, ns+"/"+a.Name)
+	}
+	return out
 }

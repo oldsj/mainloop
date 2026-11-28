@@ -439,3 +439,33 @@ func TestExecTagsAndExpiry(t *testing.T) {
 	}
 	t.Fatal("no card for the risky script")
 }
+
+// command.exec is requestable only by a session whose Agent runs auto permission mode, locked:
+// a session that is not declared so (one on a bypass Harness, an unlocked one, one whose Agent is
+// unknown) is refused before anything is recorded, and the others' types are not affected.
+func TestExecNeedsALockedAutoSession(t *testing.T) {
+	f := newFakeToolbox()
+	f.finishes(podRan, "")
+	e := newToolboxEnv(t, f)
+	unlocked := privileged.Requester{Role: "main", SessionID: "bypass-session"}
+	_, err := e.svc.Request(context.Background(), unlocked, privileged.TypeExec, jsonArgs(execArgs("true")), "r", "r1")
+	if !errors.Is(err, privileged.ErrUnsupported) || !strings.Contains(err.Error(), "auto permission mode, locked") {
+		t.Fatalf("err = %v", err)
+	}
+	if rows := e.openItems(t); len(rows) != 0 {
+		t.Fatalf("items = %d", len(rows))
+	}
+	var n int
+	if err := e.db.Pool.QueryRow(context.Background(), `SELECT count(*) FROM privileged_actions`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("rows = %d (%v)", n, err)
+	}
+	// Another type is unaffected by the session's mode.
+	if _, err := e.svc.Request(context.Background(), unlocked, privileged.TypeSSH, jsonArgs(sshArgs("true")), "r", "r2"); errors.Is(err, privileged.ErrUnsupported) &&
+		strings.Contains(err.Error(), "locked") {
+		t.Fatalf("command.ssh was refused for the session's mode: %v", err)
+	}
+	// A locked auto session is accepted.
+	if _, err := e.svc.Request(context.Background(), mainSession, privileged.TypeExec, jsonArgs(execArgs("true")), "r", "r3"); err != nil {
+		t.Fatal(err)
+	}
+}

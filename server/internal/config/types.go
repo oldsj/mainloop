@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +28,34 @@ func (s *Seconds) UnmarshalText(text []byte) error {
 		return errors.New("must be a positive number of seconds")
 	}
 	*s = Seconds(time.Duration(v * float64(time.Second)))
+	return nil
+}
+
+// AgentRefs is a comma-separated list of kagent Agents, each "name" or "namespace/name". A bare name
+// has no namespace here: the user of the list gives it the kagent namespace.
+type AgentRefs []AgentRef
+
+// UnmarshalText parses the list. Names and namespaces are DNS labels; duplicates are refused.
+func (r *AgentRefs) UnmarshalText(text []byte) error {
+	var out AgentRefs
+	for _, item := range strings.Split(string(text), ",") {
+		if item = strings.TrimSpace(item); item == "" {
+			continue
+		}
+		ns, name, ok := strings.Cut(item, "/")
+		if !ok {
+			ns, name = "", item
+		}
+		if !dnsLabel.MatchString(name) || ns != "" && !dnsLabel.MatchString(ns) || ok && ns == "" {
+			return errors.New("each Agent is a name or namespace/name, as DNS labels")
+		}
+		ref := AgentRef{Namespace: ns, Name: name}
+		if slices.Contains(out, ref) {
+			return errors.New("an Agent is listed twice")
+		}
+		out = append(out, ref)
+	}
+	*r = out
 	return nil
 }
 

@@ -30,7 +30,8 @@ const (
 	moved = "89abcdef0123456789abcdef0123456789abcdef"
 )
 
-var mainSession = privileged.Requester{Role: "main", SessionID: "main-session"}
+// mainSession runs on an Agent declared locked auto, which command.exec requires.
+var mainSession = privileged.Requester{Role: "main", SessionID: "main-session", LockedAuto: true}
 
 type sent struct{ session, id, text string }
 
