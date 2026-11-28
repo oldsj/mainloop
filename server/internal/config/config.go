@@ -81,6 +81,9 @@ type Config struct {
 	// PrivilegedUniFiEnabled accepts http.unifi: the executor reaches the UniFi console
 	// (executor.unifi in the chart).
 	PrivilegedUniFiEnabled ExactTrue `env:"MAINLOOP_PRIVILEGED_EXECUTOR_UNIFI_ENABLED"`
+	// PrivilegedToolboxEnabled accepts command.exec: the executor runs approved scripts in the
+	// toolbox (executor.toolbox in the chart).
+	PrivilegedToolboxEnabled ExactTrue `env:"MAINLOOP_PRIVILEGED_EXECUTOR_TOOLBOX_ENABLED"`
 
 	// WebFetchPerMinute bounds the open-web web_fetch tool's fetches per owner per minute, and
 	// WebFetchDenyCIDRs adds comma-separated ranges it never connects to, beyond the built-in

@@ -60,6 +60,13 @@ var installs = map[string]struct {
 		"executor.ssh.hosts[0].name=nas-01", "executor.ssh.hosts[0].address=192.0.2.20:22",
 		"executor.ssh.hosts[1].name=router", "executor.ssh.hosts[1].address=192.0.2.1:2222",
 	}},
+	// The same, with command.exec on (Kubernetes access is what mints the toolbox account's token).
+	"production-executor-toolbox": {"mainloop", "ci/production-values.yaml", []string{
+		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.kubernetes.enabled=true",
+		"executor.kubernetes.clusterName=internal-01", "executor.toolbox.enabled=true",
+		"executor.toolbox.image=ghcr.io/oldsj/mainloop-toolbox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"executor.toolbox.imagePullSecrets={ghcr-pull}",
+	}},
 	// The same, with http.unifi on.
 	"production-executor-unifi": {"mainloop", "ci/production-values.yaml", []string{
 		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.unifi.enabled=true",
@@ -98,8 +105,10 @@ type rendered struct {
 	roles        []rbacv1.Role
 	cronJobs     map[string]batchv1.CronJob
 	accounts     map[string]corev1.ServiceAccount
-	admission    []admissionv1.ValidatingAdmissionPolicy
-	admissionBy  []admissionv1.ValidatingAdmissionPolicyBinding
+	// namespaceLabels is each rendered Namespace's labels.
+	namespaceLabels map[string]map[string]string
+	admission       []admissionv1.ValidatingAdmissionPolicy
+	admissionBy     []admissionv1.ValidatingAdmissionPolicyBinding
 	// objects is "Kind/name" for every object, so a test can assert what is absent.
 	objects []string
 }
@@ -137,6 +146,8 @@ func render(t *testing.T, path string) rendered {
 		services:     map[string]corev1.Service{},
 		cronJobs:     map[string]batchv1.CronJob{},
 		accounts:     map[string]corev1.ServiceAccount{},
+
+		namespaceLabels: map[string]map[string]string{},
 	}
 	docs := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(out)))
 	for {
@@ -179,6 +190,10 @@ func render(t *testing.T, path string) rendered {
 			var s corev1.Service
 			mustUnmarshal(t, raw, &s)
 			r.services[name] = s
+		case "Namespace":
+			var n corev1.Namespace
+			mustUnmarshal(t, raw, &n)
+			r.namespaceLabels[name] = n.Labels
 		case "NetworkPolicy":
 			var p networkingv1.NetworkPolicy
 			mustUnmarshal(t, raw, &p)

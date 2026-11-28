@@ -126,3 +126,48 @@ func TestParseExecutorUniFi(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestParseExecutorToolbox(t *testing.T) {
+	const image = "ghcr.io/oldsj/mainloop-toolbox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	on := map[string]string{
+		"MAINLOOP_EXECUTOR_OP_TOKEN": "x", "MAINLOOP_EXECUTOR_TOOLBOX_ENABLED": "true",
+		"MAINLOOP_EXECUTOR_KUBERNETES_ENABLED": "true", "MAINLOOP_EXECUTOR_NAMESPACE": "mainloop-executor",
+	}
+	for name, tc := range map[string]struct {
+		set  map[string]string
+		want string
+	}{
+		"no image":       {nil, "MAINLOOP_EXECUTOR_TOOLBOX_IMAGE must be an image reference pinned by digest"},
+		"a tag":          {map[string]string{"MAINLOOP_EXECUTOR_TOOLBOX_IMAGE": "ghcr.io/oldsj/mainloop-toolbox:latest"}, "pinned by digest"},
+		"short digest":   {map[string]string{"MAINLOOP_EXECUTOR_TOOLBOX_IMAGE": "ghcr.io/oldsj/mainloop-toolbox@sha256:0123"}, "pinned by digest"},
+		"the executor's": {map[string]string{"MAINLOOP_EXECUTOR_TOOLBOX_IMAGE": image, "MAINLOOP_EXECUTOR_TOOLBOX_NAMESPACE": "mainloop-executor"}, "other than the executor's"},
+		"bad namespace":  {map[string]string{"MAINLOOP_EXECUTOR_TOOLBOX_IMAGE": image, "MAINLOOP_EXECUTOR_TOOLBOX_NAMESPACE": "Toolbox"}, "other than the executor's"},
+		"bad pull":       {map[string]string{"MAINLOOP_EXECUTOR_TOOLBOX_IMAGE": image, "MAINLOOP_EXECUTOR_TOOLBOX_PULL_SECRETS": "ok,Bad_Name"}, "not a Secret name"},
+		"no kubernetes":  {map[string]string{"MAINLOOP_EXECUTOR_TOOLBOX_IMAGE": image, "MAINLOOP_EXECUTOR_KUBERNETES_ENABLED": "false"}, "needs MAINLOOP_EXECUTOR_KUBERNETES_ENABLED"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			vars := map[string]string{}
+			for k, v := range on {
+				vars[k] = v
+			}
+			for k, v := range tc.set {
+				vars[k] = v
+			}
+			if _, err := config.ParseExecutor(vars); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+	on["MAINLOOP_EXECUTOR_TOOLBOX_IMAGE"] = image
+	on["MAINLOOP_EXECUTOR_TOOLBOX_PULL_SECRETS"] = " ghcr-pull, ,other "
+	e, err := config.ParseExecutor(on)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.ToolboxImage != image || e.ToolboxNamespace != "mainloop-toolbox" || !slices.Equal(e.ToolboxPullSecretSet, []string{"ghcr-pull", "other"}) {
+		t.Fatalf("toolbox = %q %q %v", e.ToolboxImage, e.ToolboxNamespace, e.ToolboxPullSecretSet)
+	}
+	if e, err := config.ParseExecutor(map[string]string{"MAINLOOP_EXECUTOR_OP_TOKEN": "x"}); err != nil || e.Toolbox {
+		t.Fatalf("off by default: %+v (%v)", e, err)
+	}
+}

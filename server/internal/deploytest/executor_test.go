@@ -11,6 +11,7 @@ import (
 	admissionv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 
 	"github.com/oldsj/mainloop/server/internal/approval"
@@ -170,9 +171,9 @@ func TestExecutorSSH(t *testing.T) {
 		t.Skip("helm is not installed")
 	}
 	for set, want := range map[string]string{
-		"executor.ssh.hosts=null":                                  "executor.ssh.hosts must name a host",
+		"executor.ssh.hosts=null": "executor.ssh.hosts must name a host",
 		"executor.ssh.hosts[0].name=NAS,executor.ssh.hosts[0].address=192.0.2.20:22": `"NAS" is not a DNS label`,
-		"executor.ssh.hosts[0].name=nas":                           "nas has no address",
+		"executor.ssh.hosts[0].name=nas":                                             "nas has no address",
 	} {
 		out, err := exec.CommandContext(t.Context(), helm, "template", "mainloop", chart, "--namespace", "mainloop",
 			"--values", filepath.Join(chart, "ci/production-values.yaml"), "--set", "executor.enabled=true",
@@ -419,6 +420,116 @@ func TestExecutorUniFi(t *testing.T) {
 			"--set", "executor.namespace=mainloop-executor", "--set", "executor.unifi.enabled=true", "--set-string", "executor.unifi.address="+addr).CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "executor.unifi.address must be the console's IP:port") {
 			t.Errorf("%q renders: %v\n%s", addr, err, out)
+		}
+	}
+}
+
+// command.exec is off unless executor.toolbox is on. On, serve-api accepts it, the executor gets
+// the image (by digest), namespace and pull Secrets, and the toolbox account is made: the
+// executor's own account may mint its token and nothing else changes. The account may make, read
+// and delete pods and their Secrets in the toolbox namespace only, which is Pod Security
+// restricted and denies all traffic by default. Nothing is bound cluster-wide.
+func TestExecutorToolbox(t *testing.T) {
+	if v := render(t, "production-executor-kubernetes").configMaps["mainloop-config"].Data["MAINLOOP_PRIVILEGED_EXECUTOR_TOOLBOX_ENABLED"]; v != "false" {
+		t.Errorf("command.exec is on without executor.toolbox: %q", v)
+	}
+	for _, o := range render(t, "production-executor-kubernetes").objects {
+		if strings.Contains(o, "toolbox") {
+			t.Errorf("executor.kubernetes alone renders %s", o)
+		}
+	}
+	r := render(t, "production-executor-toolbox")
+	if v := r.configMaps["mainloop-config"].Data["MAINLOOP_PRIVILEGED_EXECUTOR_TOOLBOX_ENABLED"]; v != "true" {
+		t.Errorf("serve-api's flag = %q", v)
+	}
+	env := envByName(r.deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])
+	for k, want := range map[string]string{
+		"MAINLOOP_EXECUTOR_TOOLBOX_ENABLED": "true", "MAINLOOP_EXECUTOR_TOOLBOX_NAMESPACE": "mainloop-toolbox",
+		"MAINLOOP_EXECUTOR_TOOLBOX_PULL_SECRETS": "ghcr-pull",
+		"MAINLOOP_EXECUTOR_TOOLBOX_IMAGE":        "ghcr.io/oldsj/mainloop-toolbox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	} {
+		if env[k].Value != want {
+			t.Errorf("%s = %q, want %q", k, env[k].Value, want)
+		}
+	}
+	a, ok := r.accounts["mainloop-executor-toolbox"]
+	if !ok || a.Namespace != "mainloop-executor" || a.AutomountServiceAccountToken == nil || *a.AutomountServiceAccountToken {
+		t.Errorf("account = %+v", a)
+	}
+	for _, d := range r.deployments {
+		if d.Spec.Template.Spec.ServiceAccountName == "mainloop-executor-toolbox" {
+			t.Errorf("Deployment %s runs as the toolbox account", d.Name)
+		}
+	}
+	for _, b := range r.bindings {
+		for _, s := range b.Subjects {
+			if s.Name == "mainloop-executor-toolbox" {
+				t.Errorf("the toolbox account is bound cluster-wide by %s", b.Name)
+			}
+		}
+	}
+	var role *rbacv1.Role
+	var tokens *rbacv1.Role
+	for i := range r.roles {
+		switch r.roles[i].Name {
+		case "mainloop-executor-toolbox":
+			role = &r.roles[i]
+		case "mainloop-executor-tokens":
+			tokens = &r.roles[i]
+		}
+	}
+	if role == nil || role.Namespace != "mainloop-toolbox" || len(role.Rules) != 3 {
+		t.Fatalf("role = %+v", role)
+	}
+	for _, rule := range role.Rules {
+		if slices.Contains(rule.Verbs, "*") || slices.Contains(rule.Verbs, "patch") || slices.Contains(rule.Verbs, "update") || slices.Contains(rule.Verbs, "get") && slices.Contains(rule.Resources, "secrets") {
+			t.Errorf("rule = %+v", rule)
+		}
+	}
+	if tokens == nil || !slices.Contains(tokens.Rules[0].ResourceNames, "mainloop-executor-toolbox") || !slices.Equal(tokens.Rules[0].Verbs, []string{"create"}) {
+		t.Errorf("token role = %+v", tokens)
+	}
+	if !slices.ContainsFunc(r.roleBindings, func(b rbacv1.RoleBinding) bool {
+		return b.Namespace == "mainloop-toolbox" && b.RoleRef.Name == "mainloop-executor-toolbox" &&
+			len(b.Subjects) == 1 && b.Subjects[0].Name == "mainloop-executor-toolbox" && b.Subjects[0].Namespace == "mainloop-executor"
+	}) {
+		t.Errorf("role bindings = %+v", r.roleBindings)
+	}
+	denied := slices.ContainsFunc(r.policies, func(p networkingv1.NetworkPolicy) bool {
+		return p.Namespace == "mainloop-toolbox" && len(p.Spec.PodSelector.MatchLabels) == 0 && len(p.Spec.Ingress) == 0 && len(p.Spec.Egress) == 0 &&
+			slices.Contains(p.Spec.PolicyTypes, networkingv1.PolicyTypeIngress) && slices.Contains(p.Spec.PolicyTypes, networkingv1.PolicyTypeEgress)
+	})
+	if !denied || !slices.Contains(r.objects, "Namespace/mainloop-toolbox") {
+		t.Errorf("deny: %v, objects %v", denied, r.objects)
+	}
+	if got := r.namespaceLabels["mainloop-toolbox"]["pod-security.kubernetes.io/enforce"]; got != "restricted" {
+		t.Errorf("Pod Security = %q", got)
+	}
+
+	// A bad image, a missing Kubernetes access, and a shared namespace are refused at render.
+	helm, err := exec.LookPath("helm")
+	if err != nil {
+		t.Skip("helm is not installed")
+	}
+	base := []string{"template", "mainloop", chart, "--namespace", "mainloop", "-f", filepath.Join(chart, "ci/production-values.yaml"),
+		"--set", "executor.enabled=true", "--set", "executor.namespace=mainloop-executor", "--set", "executor.toolbox.enabled=true",
+		"--set", "executor.toolbox.image=ghcr.io/oldsj/mainloop-toolbox@sha256:" + strings.Repeat("a", 64)}
+	for name, tc := range map[string]struct {
+		set  []string
+		want string
+	}{
+		"no kubernetes": {nil, "executor.toolbox needs executor.kubernetes.enabled"},
+		"a tag": {[]string{"executor.kubernetes.enabled=true", "executor.toolbox.image=ghcr.io/oldsj/mainloop-toolbox:latest"},
+			"pinned by digest"},
+		"the executor's namespace": {[]string{"executor.kubernetes.enabled=true", "executor.toolbox.namespace=mainloop-executor"}, "a namespace of its own"},
+	} {
+		args := slices.Clone(base)
+		for _, s := range tc.set {
+			args = append(args, "--set", s)
+		}
+		out, err := exec.Command(helm, args...).CombinedOutput()
+		if err == nil || !strings.Contains(string(out), tc.want) {
+			t.Errorf("%s: err %v, output %.300s", name, err, out)
 		}
 	}
 }

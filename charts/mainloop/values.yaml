@@ -50,6 +50,7 @@ config:
   MAINLOOP_PRIVILEGED_EXECUTOR_OMNI_ENABLED: 'false'
   MAINLOOP_PRIVILEGED_EXECUTOR_SSH_ENABLED: 'false'
   MAINLOOP_PRIVILEGED_EXECUTOR_UNIFI_ENABLED: 'false'
+  MAINLOOP_PRIVILEGED_EXECUTOR_TOOLBOX_ENABLED: 'false'
   # Owner API authentication (docs/specs/authentication.md): observe verifies and logs what enforce
   # would refuse, and refuses nothing. serve-api will not start outside development without a mode.
   # A deployment sets enforce once it has MAINLOOP_AUTH_OIDC_* and its machine callers carry tokens.
@@ -374,6 +375,20 @@ executor:
     enabled: false
     # e.g. 192.0.2.2:443
     address: ''
+  # command.exec. On, the executor runs one approved bash script at a time in a fresh, single-use pod
+  # of the toolbox image (images/toolbox), in its own namespace. Needs executor.kubernetes: the
+  # executor mints a token for the ServiceAccount mainloop-executor-toolbox, which may make, read and
+  # delete pods and their Secrets in that namespace only. The chart creates the namespace with Pod
+  # Security restricted and a default-deny NetworkPolicy; what a run may reach is the deployment's
+  # own network policy on pods labelled mainloop.dev/reach=internet.
+  toolbox:
+    enabled: false
+    # The image, pinned by digest: ghcr.io/oldsj/mainloop-toolbox@sha256:... (the digest the Toolbox
+    # image workflow prints). A tag is refused.
+    image: ''
+    namespace: mainloop-toolbox
+    # Secrets in the toolbox namespace that the image's registry needs, if it is private.
+    imagePullSecrets: []
   nodeSelector: {}
   affinity: {}
   tolerations: []

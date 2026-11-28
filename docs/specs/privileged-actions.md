@@ -19,6 +19,9 @@ sends the requesting session one message with the outcome.
   `serve-executor` with its own key for that host.
 - Slice 3, fourth part: `http.unifi`, one request to the UniFi console's Network application, sent
   by `serve-executor` with its own API key to the console's pinned certificate.
+- Slice 3, fifth part: `command.exec`, one bash script run in a fresh, single-use pod of the
+  toolbox image, with internet reach only. The cluster reach, run secrets and run hosts are
+  proposed, not built.
 - [Signed approvals](#signed-approvals): Approve from the iPhone app, signed with the phone's Touch
   ID approval key, checked by `serve-api` and again by `serve-executor` against keys pinned in its
   own configuration. Tested with software keys; not yet proven on a phone.
@@ -47,6 +50,10 @@ with `executor.ssh.enabled`, which is off by default. Without it, it is `[unavai
 
 `http.unifi` needs `MAINLOOP_PRIVILEGED_EXECUTOR_UNIFI_ENABLED`, exactly `true`; the chart sets it
 with `executor.unifi.enabled`, which is off by default. Without it, it is `[unavailable]`.
+
+`command.exec` needs `MAINLOOP_PRIVILEGED_EXECUTOR_TOOLBOX_ENABLED`, exactly `true`; the chart
+sets it with `executor.toolbox.enabled`, which is off by default and needs `executor.kubernetes`.
+Without it, it is `[unavailable]`.
 
 ## Tools
 
@@ -405,6 +412,72 @@ host, over ssh, as that host's admin user, with the executor's own key for that 
   the connection, but with no terminal the host may ignore both, so the command may still be
   running there.
 
+`command.exec {target, script, stdin, reach, timeout_seconds}` runs one bash script in a fresh,
+single-use pod of the toolbox image: the owner's everyday CLIs at pinned versions, for what no
+typed action covers (a CLI that is not kubectl, a script that chains tools, a download or a check
+from outside). The pod is the boundary, so the script is a script and not a command line.
+
+- `target` is `toolbox`, the only one. `script` is up to 64 KiB of text, run as
+  `bash -euo pipefail`; `stdin` is up to 64 KiB. Both allow newlines and tabs and no other control
+  or invisible character, and a carriage return only before a newline. `timeout_seconds` is 1 to
+  600, default 60. A script or stdin that looks like it holds a credential is refused
+  (`contains_secret`): the card shows them as they are. An unknown field, including `secrets` and
+  `hosts`, is refused.
+- `reach` is `internet`, the only reach built. A run reaches the internet or, later, the cluster,
+  never both; a job that needs both is two runs. `cluster` is refused as "not available yet".
+- **The image** is `executor.toolbox.image`, pinned by digest (a tag is refused at render and at
+  start). It is built from `images/toolbox` for amd64 and arm64: kubectl, talosctl, omnictl, helm,
+  kustomize, cilium, crane, yq, gh, flyctl, doctl, uv, node, pnpm, wrangler, python3, jq, psql, ssh
+  (the client, with no key), dig, curl, openssl, git and ping, each pinned by version and sha256.
+  There is no docker client or buildah: `crane` inspects, copies and tags images, and builds stay in
+  CI. talosctl and omnictl are present but hold no credential.
+- **The pod** is made in the toolbox namespace (`executor.toolbox.namespace`, default
+  `mainloop-toolbox`, which the chart creates with Pod Security `restricted` and a default-deny
+  NetworkPolicy). It is named `exec-<action id>`, so creating it again after a crash finds the same
+  run. It runs the image by digest as uid 65532 with a read-only root, every capability dropped,
+  seccomp `RuntimeDefault`, no ServiceAccount token and no service links. Limits are 1 CPU, 2 GiB
+  and 2 GiB of ephemeral storage, with a 1 GiB `/work` and a 256 MiB `/tmp`. The script and stdin
+  are a per-run Secret mounted read-only at `/run/exec`, never an argument or an environment
+  variable. The container's own `timeout` stops the script at its timeout (5 seconds from TERM to
+  KILL); the pod's deadline is the timeout plus 9 minutes, for the image's first pull and the grace.
+  `net.ipv4.ping_group_range` is set, so `ping` works without `NET_RAW`.
+- **Reach, `internet`.** The pod's labels carry `mainloop.dev/reach=internet`. The chart's
+  default-deny allows nothing; the deployment's network policy for that label opens DNS and public
+  addresses and not private, link-local or cluster ones. Without such a policy a run reaches
+  nothing. The chart does not grant the network access; it is the deployment's.
+- **Credentials.** The pod holds none of the executor's: no 1Password, Omni, ssh or UniFi
+  credential, no Kubernetes token, no database. Only the executor's toolbox account, which may make,
+  read and delete pods, their logs and Secrets in the toolbox namespace, is minted a token, and the
+  executor holds that.
+- **Preflight.** The executor checks that it can list pods in the toolbox namespace and freezes the
+  image and the reach. Nothing runs, so there is no preview. The agent sees both.
+- The card shows the script and stdin in full, the image's short digest, the timeout, and tags:
+  toolbox, the reach, and from a scan of the words, which is not a guarantee, destructive
+  (`rm`, `dd`, `delete`, `drop`, `prune`…) and may install software (`apt`, `pip`, `npm`,
+  `install`…). A script tagged destructive waits 1 hour for the owner. The card says that the output
+  (exit code, stdout and stderr together, redacted and bounded to 64 KiB) goes back to the agent
+  and is stored with the action. The output interleaves stdout and stderr, because a pod's log does.
+- **Run.** The executor reads the pod by name first. If it exists, an earlier attempt made it and
+  the executor follows it; it never makes a second. If none exists and an earlier attempt wrote its
+  `command_started` event, the run is `uncertain` and is not run again. Otherwise the image must
+  still be the one the owner saw, or it is `stale` and nothing runs; then the executor writes the
+  event and makes the pod. The API server refusing the pod is `failed`, "nothing ran". A pod that
+  never starts a container (an image that cannot be pulled, no node) within 8 minutes is `failed`,
+  "nothing ran", and its pod is deleted. A script that exits non-zero is `failed` with its output.
+  One that ran past its timeout, was killed by the pod's deadline, or whose pod ended abnormally
+  after it started is `uncertain`, and a pod that vanished before its outcome was read is
+  `uncertain`: it is never run again. A pod killed for memory is `failed`.
+- A pod outlives its run until the action is final, so that a lost answer can be read again; the
+  executor then deletes the pod and its Secret. It also deletes any run of an action it does not
+  know once an hour old.
+- It runs one at a time, for the same requesters and under the same rate limits as the other
+  executor types. It answers `unavailable` where the executor has no toolbox.
+
+Not built, and not promised by this part: `reach: cluster` through a kube proxy sidecar, `secrets`
+and `hosts` (run secrets with per-run egress), `lan:<host>`, and granting `command.exec` only to a
+session in locked auto mode. Until the last is built, `command.exec` is requestable
+by every session that may request privileged actions, so it stays on dev.
+
 `http.unifi {method, path, body}` sends one request to the UniFi console's Network application,
 with the executor's own API key.
 
@@ -703,6 +776,13 @@ key (role Admin) from the Secret `executor.omni.keySecret`, key `service-account
 executor only), `user` and `known-hosts` (the host's key line, pinned; markers and hashed names
 are refused). The executor mounts each read-only and reads it for each connection, so a rotated
 key needs no restart. The executor reaches a host only if the network lets its address through.
+
+**Toolbox.** With `executor.toolbox.enabled`, the chart renders the toolbox namespace and the
+ServiceAccount `mainloop-executor-toolbox` in the executor's namespace. No pod runs as the account.
+The executor's own account may create tokens for it, and each `command.exec` run uses one that
+outlives its deadline. A Role in the toolbox namespace lets it create, get, list and delete pods,
+get their logs, and create, list and delete Secrets, and nothing else; nothing is bound
+cluster-wide.
 
 What holds is the executor's: the parser's allowlist, the namespace checks on argv, stdin and the
 dry run, the preview's object checks, and the proxy, which holds the token. Reads are not admitted, so the executor refuses commands that name its namespace

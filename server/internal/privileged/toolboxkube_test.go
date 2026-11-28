@@ -1,0 +1,220 @@
+package privileged_test
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
+
+	"github.com/oldsj/mainloop/server/internal/privileged"
+)
+
+func newKubeToolbox() (*privileged.KubeToolbox, *fake.Clientset) {
+	c := fake.NewClientset()
+	return &privileged.KubeToolbox{Client: c, Namespace: "mainloop-toolbox", PullSecrets: []string{"ghcr-pull"}}, c
+}
+
+func toolboxSpec() privileged.ToolboxSpec {
+	return privileged.ToolboxSpec{
+		ActionID: "pa_0b6f1c2e-1111-4222-8333-444455556666", Image: toolboxImage, Reach: "internet",
+		Script: "dig +short example.org\n", Stdin: "in\n", Timeout: 90 * time.Second,
+	}
+}
+
+// A run's pod is restricted in every way the namespace's Pod Security level asks: non-root with a
+// read-only root and no capabilities, no ServiceAccount token, no service links, a deadline that
+// outlasts the script's timeout, the script in a Secret mounted read-only, and a name that is a
+// valid DNS label made from the action's id.
+func TestKubeToolboxPod(t *testing.T) {
+	k, c := newKubeToolbox()
+	spec := toolboxSpec()
+	if err := k.Create(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Create(context.Background(), spec); err != nil {
+		t.Fatalf("creating the same run again: %v", err)
+	}
+	const name = "exec-pa-0b6f1c2e-1111-4222-8333-444455556666"
+	p, err := c.CoreV1().Pods("mainloop-toolbox").Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := p.Spec
+	cs := s.Containers[0]
+	if len(s.Containers) != 1 || cs.Image != toolboxImage || cs.ImagePullPolicy != corev1.PullIfNotPresent ||
+		s.RestartPolicy != corev1.RestartPolicyNever || *s.AutomountServiceAccountToken || *s.EnableServiceLinks ||
+		s.HostNetwork || s.HostPID || s.HostIPC || s.ServiceAccountName != "" {
+		t.Fatalf("pod = %+v", s)
+	}
+	if *s.ActiveDeadlineSeconds <= 90 || *s.ActiveDeadlineSeconds > 90+int64((10*time.Minute).Seconds()) {
+		t.Errorf("deadline = %d", *s.ActiveDeadlineSeconds)
+	}
+	sc := cs.SecurityContext
+	if *sc.AllowPrivilegeEscalation || !*sc.ReadOnlyRootFilesystem || !*sc.RunAsNonRoot || *sc.RunAsUser != 65532 ||
+		!slices.Equal(sc.Capabilities.Drop, []corev1.Capability{"ALL"}) || len(sc.Capabilities.Add) != 0 ||
+		sc.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault || sc.Privileged != nil {
+		t.Errorf("container security = %+v", sc)
+	}
+	if !*s.SecurityContext.RunAsNonRoot || len(s.SecurityContext.Sysctls) != 1 || s.SecurityContext.Sysctls[0].Name != "net.ipv4.ping_group_range" {
+		t.Errorf("pod security = %+v", s.SecurityContext)
+	}
+	if cs.Resources.Limits.Cpu().String() != "1" || cs.Resources.Limits.Memory().String() != "2Gi" {
+		t.Errorf("limits = %+v", cs.Resources.Limits)
+	}
+	if len(s.ImagePullSecrets) != 1 || s.ImagePullSecrets[0].Name != "ghcr-pull" {
+		t.Errorf("pull secrets = %+v", s.ImagePullSecrets)
+	}
+	// The command is fixed: the script is a file, never a word of the command line, and the timeout
+	// is the container's own.
+	cmd := strings.Join(cs.Command, " ")
+	if strings.Contains(cmd, "dig") || !strings.Contains(cmd, `timeout -k 5 "$1" bash -euo pipefail /run/exec/script </run/exec/stdin`) || cs.Command[len(cs.Command)-1] != "90" {
+		t.Errorf("command = %q", cmd)
+	}
+	for _, v := range s.Volumes {
+		if v.HostPath != nil || v.PersistentVolumeClaim != nil {
+			t.Errorf("volume %s is not ephemeral", v.Name)
+		}
+	}
+	for _, m := range cs.VolumeMounts {
+		if m.MountPath == "/run/exec" && !m.ReadOnly {
+			t.Error("the script's mount is writable")
+		}
+	}
+	if p.Labels["mainloop.dev/privileged-action"] != spec.ActionID || p.Labels["mainloop.dev/reach"] != "internet" {
+		t.Errorf("labels = %v", p.Labels)
+	}
+	sec, err := c.CoreV1().Secrets("mainloop-toolbox").Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil || string(sec.Data["script"]) != spec.Script || string(sec.Data["stdin"]) != spec.Stdin {
+		t.Fatalf("secret = %+v (%v)", sec, err)
+	}
+}
+
+// The API server's refusal means nothing ran, and leaves no Secret behind; a lost connection does
+// not say so.
+func TestKubeToolboxCreateErrors(t *testing.T) {
+	k, c := newKubeToolbox()
+	gr := schema.GroupResource{Resource: "pods"}
+	c.PrependReactor("create", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(gr, "x", errors.New("exceeded quota"))
+	})
+	err := k.Create(context.Background(), toolboxSpec())
+	var before *privileged.NothingRan
+	if !errors.As(err, &before) || strings.Contains(err.Error(), "quota") {
+		t.Fatalf("err = %v", err)
+	}
+	if l, _ := c.CoreV1().Secrets("mainloop-toolbox").List(context.Background(), metav1.ListOptions{}); len(l.Items) != 0 {
+		t.Errorf("a Secret is left: %d", len(l.Items))
+	}
+
+	k, c = newKubeToolbox()
+	c.PrependReactor("create", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, errors.New("connection reset by peer")
+	})
+	if err := k.Create(context.Background(), toolboxSpec()); err == nil || errors.As(err, &before) {
+		t.Fatalf("a lost connection said nothing ran: %v", err)
+	}
+}
+
+func podWith(name string, phase corev1.PodPhase, status corev1.ContainerStatus, reason string) *corev1.Pod {
+	status.Name = "run"
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "mainloop-toolbox", Labels: map[string]string{
+			"app.kubernetes.io/name": "mainloop-toolbox", "mainloop.dev/privileged-action": "pa_x",
+		}},
+		Status: corev1.PodStatus{Phase: phase, Reason: reason, ContainerStatuses: []corev1.ContainerStatus{status}},
+	}
+}
+
+// The pod's state is read from its container: waiting means nothing ran; running and terminated
+// mean the script started.
+func TestKubeToolboxState(t *testing.T) {
+	started := metav1.Now()
+	yes := true
+	for name, tc := range map[string]struct {
+		pod  *corev1.Pod
+		want privileged.ToolboxState
+	}{
+		"pulling": {podWith("exec-pa-x", corev1.PodPending, corev1.ContainerStatus{State: corev1.ContainerState{
+			Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff"}}}, ""),
+			privileged.ToolboxState{Exists: true, Phase: privileged.ToolboxPending, Reason: "ImagePullBackOff"}},
+		"running": {podWith("exec-pa-x", corev1.PodRunning, corev1.ContainerStatus{State: corev1.ContainerState{
+			Running: &corev1.ContainerStateRunning{StartedAt: started}}}, ""),
+			privileged.ToolboxState{Exists: true, Phase: privileged.ToolboxRunning, Started: true, Reason: "Running"}},
+		"exited": {podWith("exec-pa-x", corev1.PodSucceeded, corev1.ContainerStatus{State: corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{ExitCode: 0, StartedAt: started, Reason: "Completed"}}}, ""),
+			privileged.ToolboxState{Exists: true, Phase: privileged.ToolboxExited, Started: true, Reason: "Completed"}},
+		"exit 3": {podWith("exec-pa-x", corev1.PodFailed, corev1.ContainerStatus{State: corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{ExitCode: 3, StartedAt: started, Reason: "Error"}}}, ""),
+			privileged.ToolboxState{Exists: true, Phase: privileged.ToolboxExited, Started: true, ExitCode: 3, Reason: "Error"}},
+		"deadline": {podWith("exec-pa-x", corev1.PodFailed, corev1.ContainerStatus{State: corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, StartedAt: started, Reason: "Error"}}}, "DeadlineExceeded"),
+			privileged.ToolboxState{Exists: true, Phase: privileged.ToolboxExited, Started: true, ExitCode: 137, Reason: "DeadlineExceeded"}},
+		"could not be created": {podWith("exec-pa-x", corev1.PodFailed, corev1.ContainerStatus{State: corev1.ContainerState{
+			Terminated: &corev1.ContainerStateTerminated{ExitCode: 128, Reason: "ContainerCannotRun"}}}, ""),
+			privileged.ToolboxState{Exists: true, Phase: privileged.ToolboxFailed, ExitCode: 128, Reason: "ContainerCannotRun"}},
+		"evicted": {podWith("exec-pa-x", corev1.PodFailed, corev1.ContainerStatus{Started: &yes}, "Evicted"),
+			privileged.ToolboxState{Exists: true, Phase: privileged.ToolboxFailed, Started: true, Reason: "Evicted"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			k, c := newKubeToolbox()
+			tc.pod.Name = "exec-pa-x"
+			if _, err := c.CoreV1().Pods("mainloop-toolbox").Create(context.Background(), tc.pod, metav1.CreateOptions{}); err != nil {
+				t.Fatal(err)
+			}
+			got, err := k.State(context.Background(), "pa_x")
+			if err != nil || got != tc.want {
+				t.Fatalf("state = %+v (%v), want %+v", got, err, tc.want)
+			}
+		})
+	}
+	k, _ := newKubeToolbox()
+	if st, err := k.State(context.Background(), "pa_missing"); err != nil || st.Exists {
+		t.Fatalf("a missing pod: %+v (%v)", st, err)
+	}
+}
+
+// Ready needs the namespace and the account's Role; Runs, Output and Delete work on the run's
+// pod and Secret.
+func TestKubeToolboxReadyRunsOutputDelete(t *testing.T) {
+	k, c := newKubeToolbox()
+	if err := k.Ready(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Create(context.Background(), toolboxSpec()); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := k.Runs(context.Background())
+	if err != nil || len(runs) != 1 || runs[0].ActionID != toolboxSpec().ActionID {
+		t.Fatalf("runs = %+v (%v)", runs, err)
+	}
+	if out, err := k.Output(context.Background(), toolboxSpec().ActionID, 4); err != nil || len(out) > 4 {
+		t.Fatalf("output = %q (%v)", out, err)
+	}
+	if err := k.Delete(context.Background(), toolboxSpec().ActionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.Delete(context.Background(), toolboxSpec().ActionID); err != nil {
+		t.Fatalf("deleting a missing run: %v", err)
+	}
+	if runs, _ := k.Runs(context.Background()); len(runs) != 0 {
+		t.Fatalf("runs after delete = %+v", runs)
+	}
+
+	c.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", errors.New("no"))
+	})
+	err = k.Ready(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "toolbox is not ready") {
+		t.Fatalf("ready = %v", err)
+	}
+}
