@@ -224,6 +224,11 @@ func (Unimplemented) GetPrivilegedAction(context.Context, GetPrivilegedActionReq
 	return nil, apierr.NotImplemented
 }
 
+// GetPrivilegedApprovalMode is not implemented yet.
+func (Unimplemented) GetPrivilegedApprovalMode(context.Context, GetPrivilegedApprovalModeRequestObject) (GetPrivilegedApprovalModeResponseObject, error) {
+	return nil, apierr.NotImplemented
+}
+
 // GetProject is not implemented yet.
 func (Unimplemented) GetProject(context.Context, GetProjectRequestObject) (GetProjectResponseObject, error) {
 	return nil, apierr.NotImplemented

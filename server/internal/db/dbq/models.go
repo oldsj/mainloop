@@ -832,6 +832,7 @@ type PrivilegedAction struct {
 	DeliveryDetail     *string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	ApprovalChannel    *string
 }
 
 type PrivilegedActionEvent struct {

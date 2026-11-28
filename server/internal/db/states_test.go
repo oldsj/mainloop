@@ -209,6 +209,7 @@ func TestStateConstantsMatchChecks(t *testing.T) {
 		{"privileged_actions", "state", privileged.States},
 		{"privileged_actions", "type", privileged.Types()},
 		{"privileged_actions", "delivery_state", privileged.DeliveryStates},
+		{"privileged_actions", "approval_channel", privileged.Channels},
 		{"project_proposals", "state", strs(
 			onboarding.StateProposed, onboarding.StateApproved, onboarding.StateRejected,
 			onboarding.StateApplied, onboarding.StateFailed)},

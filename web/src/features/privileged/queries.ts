@@ -10,3 +10,8 @@ export function usePrivilegedAction(id: string) {
     params: { path: { action_id: id } }
   });
 }
+
+/** How the executor's action types are approved here: web, signed, or null with no executor. */
+export function usePrivilegedApprovalMode() {
+  return $api.useQuery('get', '/privileged-actions/approval-mode');
+}

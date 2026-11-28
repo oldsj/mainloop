@@ -34,6 +34,12 @@ The executor types are accepted only when `MAINLOOP_PRIVILEGED_EXECUTOR_ENABLED`
 `true`. The chart sets it when `executor.enabled` deploys `serve-executor` (see
 [The executor](#the-executor)). Without it, a request of an executor type is `[unsupported_action]`.
 
+With an executor, how its types are approved must be chosen: `MAINLOOP_PRIVILEGED_APPROVALS_MODE`
+is exactly `web` or `signed`, in `serve-api` and `serve-executor` alike, and each refuses to start
+without it (see [Approval channels](#approval-channels)). The chart sets it from
+`executor.approvals.mode`, which has no default: with `executor.enabled` and no mode the chart
+refuses to render.
+
 The `k8s.*` types, `argocd.sync` and `command.kubectl` also need
 `MAINLOOP_PRIVILEGED_EXECUTOR_KUBERNETES_ENABLED`, exactly `true`. The chart sets it with
 `executor.kubernetes.enabled`, which is off by default.
@@ -77,7 +83,9 @@ supervises them.
 
 The tool returns at once with the action's state. The agent ends its turn. When the action ends,
 the session gets one message, whose id is the action id, naming the final state, the owner's note
-(if any) and the result. `get_privileged_action` returns the full record, including the audit
+(if any) and the result. For an approved action it says how the owner approved
+([approval channels](#approval-channels)): "The owner approved it from the web app (no Touch ID)"
+or "on their phone, signed with Touch ID". `get_privileged_action` returns the full record, including `approval_channel` and the audit
 events, except the diffs of `k8s.patch`, `k8s.apply` and `command.kubectl`, and the dry runs of `command.omnictl`: they hold the objects' contents, read with
 the executor's credential before anyone approved, so the agent gets each object's name and whether
 it is created, not the diff, its size or a hash of it (any of which would confirm a guess), and only
@@ -776,15 +784,19 @@ is refused (`403`) unless:
 
 An approval token with an answer from the web app is refused.
 
-**Pinning.** The owner pins phones' approval keys in the chart's `executor.approvalKeys.pinned`:
+**Pinning.** With `executor.approvals.mode: signed`, the owner pins phones' approval keys in the
+chart's `executor.approvalKeys.pinned`:
 each entry is the public JWK that Settings › Devices shows, with the device id as `kid`. The chart
 gives the same value, `MAINLOOP_PRIVILEGED_APPROVAL_KEYS`, to `serve-api` and `serve-executor`, and
 each refuses to start if it is malformed.
 
-`executor.approvalKeys.required` (`MAINLOOP_PRIVILEGED_APPROVAL_KEYS_REQUIRED`, in both processes)
-makes this fail closed: the chart refuses to render, and either process refuses to start, with no
-key pinned, so a values change that drops the keys can't quietly go back to unsigned approvals.
-With any key pinned, or required:
+`executor.approvals.mode: signed` (`MAINLOOP_PRIVILEGED_APPROVALS_MODE=signed`, in both
+processes) makes this fail closed: the chart refuses to render, and either process refuses to start,
+with no key pinned, so a values change that drops the keys can't quietly go back to unsigned
+approvals. The chart refuses a `web` mode with keys pinned for the same reason in reverse: pinned
+keys make the executor refuse the approvals the mode promises.
+
+In `signed` mode:
 
 - `serve-api` takes an Approve of an executor type only from a phone whose key is pinned, signed
   with it. The web app's Approve of an executor type is refused ("approve this on your iPhone").
@@ -808,9 +820,7 @@ With any key pinned, or required:
   refused for its age ends **uncertain**, as an earlier attempt may have acted, and is raised to
   the owner.
 
-With no key pinned and not required, an executor type is approved as before, from the web app or a
-phone's signed Approve, and both processes log `UNSIGNED PRIVILEGED APPROVALS` as a warning at
-every start.
+In `web` mode, see [Approval channels](#approval-channels).
 
 **Limits.**
 
@@ -824,12 +834,64 @@ every start.
 - Preflight runs before any approval, so a compromised `serve-api` can still request actions and
   read their frozen facts. Signed approvals bound what runs, not what preflight reads.
 
+## Approval channels
+
+Every approval records the channel it came through, in `privileged_actions.approval_channel`, set in
+the same step that records the decision:
+
+| Channel        | What it is                                                                                          |
+| -------------- | --------------------------------------------------------------------------------------------------- |
+| `phone-signed` | A phone's Approve with a token its Touch ID approval key signed, recorded in `privileged_approvals` |
+| `web`          | Any other approval: the web app's Approve, which carries no signature                               |
+
+A denial has no channel. An action approved before the channel was recorded got it from its record:
+`phone-signed` with a recorded signed approval, otherwise `web`.
+
+The channel shows in each place the approval does:
+
+- **The card** (web app) says what Approve does where it is pressed: "recorded as approved from the
+  web app (no Touch ID)", or in the iPhone app "signs with Touch ID".
+- **The audit page** shows it in each row and in an action's facts, and `approval_channel` is a
+  field of the audit's `PrivilegedActionSummary`.
+- **The agent's view** (`get_privileged_action`) has `approval_channel` and a sentence in its text.
+- **The `decided` event** says it: "the owner approved from the web app (no Touch ID), with the
+  card's digest".
+- **The message the requesting session gets** says "The owner approved it from the web app (no Touch
+  ID)." or "...on their phone, signed with Touch ID.".
+
+**The mode.** `executor.approvals.mode` (`MAINLOOP_PRIVILEGED_APPROVALS_MODE`) is `web` or `signed`.
+It is never defaulted, so dropping the approval keys can't fall back to web approvals silently.
+
+- `signed` is the [signed approvals](#signed-approvals) above: keys pinned, the executor runs only
+  what a pinned key signed, and the web app's Approve of an executor type is refused.
+- `web` pins no key. The web app's Approve of an executor type is the owner's approval, and the
+  executor runs any approval `serve-api` recorded. What that gives up:
+  - A compromised `serve-api`, or anything with its database role, can approve an action itself;
+    the executor has no signature to check.
+  - A stolen browser session approves, with no Touch ID.
+  - The web app shows `serve-api`'s rendering of the card, not a record the client hashed.
+
+  While the mode is `web`, both processes log `UNSIGNED PRIVILEGED APPROVALS` at every start, and
+  the audit page shows a banner, "Approvals run unsigned". `GET /privileged-actions/approval-mode`
+  returns the mode (`null` with no executor) for the page.
+
+**Not built: a step-up for web approvals.** A web Approve of an executor type could require a
+sign-in within the last 12 hours. The gateway's login cookie is the Pocket ID token the web app
+passes on, and nothing here shows it carries `auth_time`: the app's own sign-in asks for it
+(`max_age`) explicitly so that its token does (see [devices](devices.md#registering-a-phone)). A step-up
+on a claim that may be absent would either never apply or lock out every web approval, and the
+alternative is a second login in Mainloop. So `web` mode has no step-up. Pairing a phone and setting
+`signed` is the way to require one.
+
+**Pairing day:** pin the phone's key and set `executor.approvals.mode: signed`, one values change.
+From then on the web app's Approve of an executor type is refused.
+
 ## Audit
 
 `GET /privileged-actions` lists the owner's 100 newest actions: type, state, the card's title, the
-requester, the reason, the times, the note and the error. `GET /privileged-actions/{action_id}`
+requester, the reason, the times, the note, the approval channel and the error. `GET /privileged-actions/{action_id}`
 adds the arguments, the frozen facts, the digest, the card's text, the result and every event. The
-web app shows them at `/privileged`, reachable from the command palette. The page is read-only:
+web app shows them at `/privileged`, reachable from the command palette, under a banner while the approval mode is `web`. The page is read-only:
 the owner approves or denies from the Needs-you card. It reads the table directly, so the history
 stays readable when privileged actions are off.
 

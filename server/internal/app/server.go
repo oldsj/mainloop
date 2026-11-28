@@ -199,11 +199,20 @@ func New(d Deps) *Server {
 		DotfilesAPI:     dotfiles.NewAPI(d.Pool, d.Config.Identity.OwnerID),
 		TranscriptsAPI:  transcripts.NewAPI(d.Transcripts),
 		GrantAPI:        &preview.GrantAPI{Proxy: d.Preview, AuthOff: d.Auth == nil || d.Auth.Mode == auth.ModeOff},
-		PrivilegedAPI:   &privileged.PrivilegedAPI{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID},
+		PrivilegedAPI:   privilegedAPI(d),
 		DevicesAPI:      devicesAPI,
 		OwnerMemoryAPI:  &ownermemory.OwnerMemoryAPI{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID},
 		deps:            d,
 	}
+}
+
+// privilegedAPI serves the audit, and the approval mode when an executor is deployed.
+func privilegedAPI(d Deps) *privileged.PrivilegedAPI {
+	a := &privileged.PrivilegedAPI{Pool: d.Pool, OwnerID: d.Config.Identity.OwnerID}
+	if d.Config.PrivilegedExecutorEnabled {
+		a.ApprovalMode = string(d.Config.PrivilegedApprovalsMode)
+	}
+	return a
 }
 
 // Handler returns the owner API: the strict handlers behind request validation, the body cap,

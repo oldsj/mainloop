@@ -124,6 +124,11 @@ describe('Needs you', () => {
     renderInbox();
 
     const first = (await screen.findByText('Merge octo-org/widgets#7')).closest('article')!;
+    expect(
+      within(first as HTMLElement).getByText(
+        'Approve here is recorded as approved from the web app (no Touch ID).'
+      )
+    ).toBeInTheDocument();
     await user.click(within(first as HTMLElement).getByRole('button', { name: 'Approve' }));
     await waitFor(() =>
       expect(bodies).toEqual([
@@ -186,6 +191,7 @@ describe('Needs you', () => {
       renderInbox();
       const card = (await screen.findByText('Restart shop/web')).closest('article') as HTMLElement;
       const approve = () => user.click(within(card).getByRole('button', { name: 'Approve' }));
+      expect(within(card).getByText(/Approve here signs with Touch ID/)).toBeInTheDocument();
 
       await approve(); // Touch ID cancelled: nothing shown, nothing sent
       await waitFor(() => expect(posted).toHaveLength(1));

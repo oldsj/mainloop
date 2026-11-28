@@ -2,6 +2,7 @@ import type { components } from '@/api/schema.gen';
 
 export type PrivilegedActionSummary = components['schemas']['PrivilegedActionSummary'];
 export type PrivilegedActionDetail = components['schemas']['PrivilegedActionDetail'];
+export type PrivilegedApprovalChannel = components['schemas']['PrivilegedApprovalChannel'];
 export type PrivilegedActionState = components['schemas']['PrivilegedActionState'];
 
 /** Each state in plain words, and whether it is still open, done, or ended without running. */
@@ -29,3 +30,9 @@ export function requester(a: PrivilegedActionSummary): string {
     ? `${a.requester_role} · task ${a.requester_task_id}`
     : a.requester_role;
 }
+
+/** How the owner approved, in words: the web app carries no Touch ID signature, a phone's does. */
+export const CHANNEL: Record<PrivilegedApprovalChannel, string> = {
+  web: 'From the web app (no Touch ID)',
+  'phone-signed': 'On a phone, signed with Touch ID'
+};

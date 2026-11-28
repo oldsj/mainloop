@@ -18,6 +18,19 @@ import (
 type PrivilegedAPI struct {
 	Pool    *pgxpool.Pool
 	OwnerID string
+	// ApprovalMode is the executor's approval mode (web or signed), empty when no executor is
+	// deployed (docs/specs/privileged-actions.md, "Approval channels").
+	ApprovalMode string
+}
+
+// GetPrivilegedApprovalMode implements api.StrictServerInterface.
+func (a *PrivilegedAPI) GetPrivilegedApprovalMode(_ context.Context, _ api.GetPrivilegedApprovalModeRequestObject) (api.GetPrivilegedApprovalModeResponseObject, error) {
+	out := api.GetPrivilegedApprovalMode200JSONResponse{}
+	if a.ApprovalMode != "" {
+		m := api.PrivilegedApprovalModeMode(a.ApprovalMode)
+		out.Mode = &m
+	}
+	return out, nil
 }
 
 // ListPrivilegedActions implements api.StrictServerInterface.
@@ -95,7 +108,7 @@ func summary(r dbq.PrivilegedAction) api.PrivilegedActionSummary {
 		Id: r.ID, Type: r.Type, State: api.PrivilegedActionState(r.State), Title: title,
 		RequesterRole: r.RequesterRole, RequesterSessionId: r.RequesterSessionID, RequesterTaskId: r.RequesterTaskID,
 		Reason: r.Reason, CreatedAt: r.CreatedAt, ExpiresAt: r.ExpiresAt, DecidedAt: r.DecidedAt,
-		FinishedAt: r.FinishedAt, DecisionNote: r.DecisionNote, LastError: r.LastError,
+		FinishedAt: r.FinishedAt, DecisionNote: r.DecisionNote, LastError: r.LastError, ApprovalChannel: channel(r.ApprovalChannel),
 	}
 }
 
@@ -104,4 +117,12 @@ func object(raw []byte) map[string]any {
 	m := map[string]any{}
 	_ = json.Unmarshal(raw, &m)
 	return m
+}
+
+func channel(c *string) *api.PrivilegedApprovalChannel {
+	if c == nil {
+		return nil
+	}
+	v := api.PrivilegedApprovalChannel(*c)
+	return &v
 }

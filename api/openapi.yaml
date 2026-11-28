@@ -1695,6 +1695,31 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPError'
+  /privileged-actions/approval-mode:
+    get:
+      tags:
+        - privileged
+      summary: Get Privileged Approval Mode
+      description: >-
+        How this instance takes the owner's approval of the executor's action types (docs/specs/privileged-actions.md,
+        "Approval channels"). `web` runs an approval the web app recorded, with no signature to check; `signed` runs
+        only an approval a pinned phone signed with Touch ID. `null` when no executor is deployed.
+      operationId: getPrivilegedApprovalMode
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PrivilegedApprovalMode'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPError'
   /privileged-actions/{action_id}:
     get:
       tags:
@@ -6986,6 +7011,32 @@ components:
         - cancelled
         - uncertain
       title: PrivilegedActionState
+    PrivilegedApprovalChannel:
+      type: string
+      enum:
+        - web
+        - phone-signed
+      description: >-
+        How the owner approved: `web` from the web app, whose answer carries no signature, or `phone-signed` from a
+        phone, with a token its Touch ID approval key signed.
+      title: PrivilegedApprovalChannel
+    PrivilegedApprovalMode:
+      type: object
+      properties:
+        mode:
+          description: >-
+            `web`: the executor runs approvals the web app recorded, so a compromised serve-api could approve an action
+            itself. `signed`: only an approval a pinned phone signed. Null when no executor is deployed.
+          anyOf:
+            - type: string
+              enum:
+                - web
+                - signed
+            - type: 'null'
+      required:
+        - mode
+      additionalProperties: false
+      title: PrivilegedApprovalMode
     PrivilegedActionSummary:
       type: object
       properties:
@@ -7030,6 +7081,11 @@ components:
           anyOf:
             - type: string
             - type: 'null'
+        approval_channel:
+          description: How the owner approved; null until an approval.
+          anyOf:
+            - $ref: '#/components/schemas/PrivilegedApprovalChannel'
+            - type: 'null'
         last_error:
           anyOf:
             - type: string
@@ -7048,6 +7104,7 @@ components:
         - decided_at
         - finished_at
         - decision_note
+        - approval_channel
         - last_error
       title: PrivilegedActionSummary
     PrivilegedActionDetail:

@@ -61,3 +61,20 @@ func TestOwnerAudit(t *testing.T) {
 		t.Error("another owner read the action")
 	}
 }
+
+// The audit page needs to know whether the web app's approvals run unsigned: the mode is reported
+// when an executor is deployed, and null otherwise.
+func TestApprovalModeIsReported(t *testing.T) {
+	for mode, want := range map[string]*api.PrivilegedApprovalModeMode{
+		"": nil, "web": ptr(api.PrivilegedApprovalModeMode("web")), "signed": ptr(api.PrivilegedApprovalModeMode("signed")),
+	} {
+		res, err := (&privileged.PrivilegedAPI{ApprovalMode: mode}).GetPrivilegedApprovalMode(context.Background(), api.GetPrivilegedApprovalModeRequestObject{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := res.(api.GetPrivilegedApprovalMode200JSONResponse).Mode
+		if (got == nil) != (want == nil) || got != nil && *got != *want {
+			t.Errorf("mode %q reported as %v", mode, got)
+		}
+	}
+}
