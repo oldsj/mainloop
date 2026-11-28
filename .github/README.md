@@ -40,6 +40,19 @@ which is what registration takes. `images/opencozy-next-env` is the amd64 enviro
 `oldsj/opencozy-next`: Go, Node, pnpm, Postgres 18 (`ocn-postgres`, run as the project's workspace
 service on port 54329) and agent-browser with Debian's Chromium.
 
+## Toolbox image
+
+[Toolbox image](workflows/toolbox-image.yml) builds `images/toolbox/Dockerfile` for `linux/amd64`
+and `linux/arm64` on native runners and smoke-tests it (`images/toolbox/smoke.sh`: every tool
+starts and reports its pinned version, as uid 65532 with a read-only root and no capabilities). It
+runs on pull requests that touch `images/toolbox/**` or `server/Dockerfile`, and on pushes to
+`main` it publishes `ghcr.io/oldsj/mainloop-toolbox:<short sha>` as a multi-arch index and writes
+its digest to the run summary. Deployments pin that digest. The image is what `command.exec` runs
+scripts in; see the privileged-actions spec. Each binary is pinned by version and sha256 in
+`images/toolbox/install-tools`, and `images/toolbox/check-pins` keeps kubectl, omnictl and
+talosctl equal to `server/Dockerfile`'s. npm tools install from `images/toolbox/package-lock.json`.
+There is no docker client or buildah: `crane` covers images, and builds stay in CI.
+
 ## Multiarchitecture workspace development image
 
 [Mainloop dev image](workflows/dev-image.yml) runs on PRs targeting `main` and

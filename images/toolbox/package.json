@@ -1,0 +1,9 @@
+{
+  "name": "mainloop-toolbox-npm",
+  "private": true,
+  "description": "npm-installed CLIs in the toolbox image, locked by package-lock.json",
+  "dependencies": {
+    "pnpm": "12.18.0",
+    "wrangler": "4.169.0"
+  }
+}
