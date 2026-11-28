@@ -60,10 +60,9 @@ var installs = map[string]struct {
 		"executor.ssh.hosts[0].name=nas-01", "executor.ssh.hosts[0].address=192.0.2.20:22",
 		"executor.ssh.hosts[1].name=router", "executor.ssh.hosts[1].address=192.0.2.1:2222",
 	}},
-	// The same, with command.exec on (Kubernetes access is what mints the toolbox account's token).
+	// The same, with command.exec on, and no Kubernetes access (the toolbox does not need it).
 	"production-executor-toolbox": {"mainloop", "ci/production-values.yaml", []string{
-		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.kubernetes.enabled=true",
-		"executor.kubernetes.clusterName=internal-01", "executor.approvals.mode=web", "executor.toolbox.enabled=true",
+		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.approvals.mode=web", "executor.toolbox.enabled=true",
 		"executor.toolbox.image=ghcr.io/oldsj/mainloop-toolbox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		"executor.toolbox.imagePullSecrets={ghcr-pull}",
 	}},

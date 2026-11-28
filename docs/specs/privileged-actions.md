@@ -58,7 +58,7 @@ with `executor.ssh.enabled`, which is off by default. Without it, it is `[unavai
 with `executor.unifi.enabled`, which is off by default. Without it, it is `[unavailable]`.
 
 `command.exec` needs `MAINLOOP_PRIVILEGED_EXECUTOR_TOOLBOX_ENABLED`, exactly `true`; the chart
-sets it with `executor.toolbox.enabled`, which is off by default and needs `executor.kubernetes`.
+sets it with `executor.toolbox.enabled`, which is off by default and independent of `executor.kubernetes`.
 Without it, it is `[unavailable]`.
 
 ## Tools

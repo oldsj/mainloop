@@ -162,9 +162,6 @@ spec:
               value: /etc/mainloop-executor/unifi
             {{- end }}
             {{- if .toolbox.enabled }}
-            {{- if not .kubernetes.enabled }}
-            {{- fail "executor.toolbox needs executor.kubernetes.enabled" }}
-            {{- end }}
             {{- if not (regexMatch "^[a-z0-9][a-z0-9./_:-]*@sha256:[a-f0-9]{64}$" (toString .toolbox.image)) }}
             {{- fail "executor.toolbox.image must be an image reference pinned by digest (name@sha256:...)" }}
             {{- end }}
@@ -273,7 +270,6 @@ subjects:
 {{- end }}
 {{- if .kubernetes.enabled }}
 {{- $ns := .namespace }}
-{{- $toolboxAccount := "mainloop-executor-toolbox" }}
 {{- $accounts := dict "workloads" "mainloop-executor-workloads" "delete" "mainloop-executor-delete" "writer" "mainloop-executor-writer" "argo" "mainloop-executor-argo" "admin" "mainloop-executor-admin" }}
 {{- range $role, $account := $accounts }}
 ---
@@ -406,7 +402,7 @@ metadata:
 rules:
   - apiGroups: ['']
     resources: [serviceaccounts/token]
-    resourceNames: [{{ join ", " (concat (values $accounts) (ternary (list $toolboxAccount) (list) $.Values.executor.toolbox.enabled) | sortAlpha) }}]
+    resourceNames: [{{ join ", " (values $accounts | sortAlpha) }}]
     verbs: [create]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -445,6 +441,34 @@ metadata:
   name: mainloop-executor-toolbox
   namespace: {{ .namespace }}
 automountServiceAccountToken: false
+---
+# The executor's own account may mint tokens for the toolbox account, and nothing else here. (With
+# executor.kubernetes, its Role mainloop-executor-tokens covers the other accounts; the two are
+# independent.)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mainloop-executor-toolbox-tokens
+  namespace: {{ .namespace }}
+rules:
+  - apiGroups: ['']
+    resources: [serviceaccounts/token]
+    resourceNames: [mainloop-executor-toolbox]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mainloop-executor-toolbox-tokens
+  namespace: {{ .namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mainloop-executor-toolbox-tokens
+subjects:
+  - kind: ServiceAccount
+    name: mainloop-executor
+    namespace: {{ .namespace }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

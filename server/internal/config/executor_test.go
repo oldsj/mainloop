@@ -131,7 +131,7 @@ func TestParseExecutorToolbox(t *testing.T) {
 	const image = "ghcr.io/oldsj/mainloop-toolbox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	on := map[string]string{
 		"MAINLOOP_EXECUTOR_OP_TOKEN": "x", "MAINLOOP_EXECUTOR_TOOLBOX_ENABLED": "true",
-		"MAINLOOP_EXECUTOR_KUBERNETES_ENABLED": "true", "MAINLOOP_EXECUTOR_NAMESPACE": "mainloop-executor",
+		"MAINLOOP_EXECUTOR_NAMESPACE": "mainloop-executor",
 	}
 	for name, tc := range map[string]struct {
 		set  map[string]string
@@ -143,7 +143,7 @@ func TestParseExecutorToolbox(t *testing.T) {
 		"the executor's": {map[string]string{"MAINLOOP_EXECUTOR_TOOLBOX_IMAGE": image, "MAINLOOP_EXECUTOR_TOOLBOX_NAMESPACE": "mainloop-executor"}, "other than the executor's"},
 		"bad namespace":  {map[string]string{"MAINLOOP_EXECUTOR_TOOLBOX_IMAGE": image, "MAINLOOP_EXECUTOR_TOOLBOX_NAMESPACE": "Toolbox"}, "other than the executor's"},
 		"bad pull":       {map[string]string{"MAINLOOP_EXECUTOR_TOOLBOX_IMAGE": image, "MAINLOOP_EXECUTOR_TOOLBOX_PULL_SECRETS": "ok,Bad_Name"}, "not a Secret name"},
-		"no kubernetes":  {map[string]string{"MAINLOOP_EXECUTOR_TOOLBOX_IMAGE": image, "MAINLOOP_EXECUTOR_KUBERNETES_ENABLED": "false"}, "needs MAINLOOP_EXECUTOR_KUBERNETES_ENABLED"},
+		"no namespace":   {map[string]string{"MAINLOOP_EXECUTOR_TOOLBOX_IMAGE": image, "MAINLOOP_EXECUTOR_NAMESPACE": ""}, "MAINLOOP_EXECUTOR_NAMESPACE must be the executor's namespace"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			vars := map[string]string{}

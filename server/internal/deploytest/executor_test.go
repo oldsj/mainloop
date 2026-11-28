@@ -503,8 +503,8 @@ func TestExecutorToolbox(t *testing.T) {
 	}
 	for _, b := range r.bindings {
 		for _, s := range b.Subjects {
-			if s.Name == "mainloop-executor-toolbox" {
-				t.Errorf("the toolbox account is bound cluster-wide by %s", b.Name)
+			if strings.HasPrefix(s.Name, "mainloop-executor") && s.Namespace == "mainloop-executor" {
+				t.Errorf("%s is bound cluster-wide by %s: the toolbox needs no cluster-wide grant", s.Name, b.Name)
 			}
 		}
 	}
@@ -514,7 +514,7 @@ func TestExecutorToolbox(t *testing.T) {
 		switch r.roles[i].Name {
 		case "mainloop-executor-toolbox":
 			role = &r.roles[i]
-		case "mainloop-executor-tokens":
+		case "mainloop-executor-toolbox-tokens":
 			tokens = &r.roles[i]
 		}
 	}
@@ -546,7 +546,7 @@ func TestExecutorToolbox(t *testing.T) {
 		t.Errorf("Pod Security = %q", got)
 	}
 
-	// A bad image, a missing Kubernetes access, and a shared namespace are refused at render.
+	// A bad image and a shared namespace are refused at render.
 	helm, err := exec.LookPath("helm")
 	if err != nil {
 		t.Skip("helm is not installed")
@@ -558,10 +558,8 @@ func TestExecutorToolbox(t *testing.T) {
 		set  []string
 		want string
 	}{
-		"no kubernetes": {nil, "executor.toolbox needs executor.kubernetes.enabled"},
-		"a tag": {[]string{"executor.kubernetes.enabled=true", "executor.toolbox.image=ghcr.io/oldsj/mainloop-toolbox:latest"},
-			"pinned by digest"},
-		"the executor's namespace": {[]string{"executor.kubernetes.enabled=true", "executor.toolbox.namespace=mainloop-executor"}, "a namespace of its own"},
+		"a tag":                    {[]string{"executor.toolbox.image=ghcr.io/oldsj/mainloop-toolbox:latest"}, "pinned by digest"},
+		"the executor's namespace": {[]string{"executor.toolbox.namespace=mainloop-executor"}, "a namespace of its own"},
 	} {
 		args := slices.Clone(base)
 		for _, s := range tc.set {

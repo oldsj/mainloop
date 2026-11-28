@@ -383,8 +383,8 @@ executor:
     # e.g. 192.0.2.2:443
     address: ''
   # command.exec. On, the executor runs one approved bash script at a time in a fresh, single-use pod
-  # of the toolbox image (images/toolbox), in its own namespace. Needs executor.kubernetes: the
-  # executor mints a token for the ServiceAccount mainloop-executor-toolbox, which may make, read and
+  # of the toolbox image (images/toolbox), in its own namespace. Independent of executor.kubernetes
+  # (no cluster-wide grant is made for it): the executor mints a token for the ServiceAccount mainloop-executor-toolbox, which may make, read and
   # delete pods and their Secrets in that namespace only. The chart creates the namespace with Pod
   # Security restricted and a default-deny NetworkPolicy; what a run may reach is the deployment's
   # own network policy on pods labelled mainloop.dev/reach=internet.
