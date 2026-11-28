@@ -126,7 +126,7 @@ func TestExecutorOmni(t *testing.T) {
 		t.Skip("helm is not installed")
 	}
 	out, err := exec.CommandContext(t.Context(), helm, "template", "mainloop", chart, "--namespace", "mainloop",
-		"--values", filepath.Join(chart, "ci/production-values.yaml"), "--set", "executor.enabled=true",
+		"--values", filepath.Join(chart, "ci/production-values.yaml"), "--set", "executor.enabled=true", "--set", "executor.approvals.mode=web",
 		"--set", "executor.namespace=mainloop-executor", "--set", "executor.omni.enabled=true",
 		"--set", "executor.omni.endpoint=http://omni.example.com").CombinedOutput()
 	if err == nil || !strings.Contains(string(out), "executor.omni.endpoint must be Omni's https URL") {
@@ -170,12 +170,12 @@ func TestExecutorSSH(t *testing.T) {
 		t.Skip("helm is not installed")
 	}
 	for set, want := range map[string]string{
-		"executor.ssh.hosts=null":                                  "executor.ssh.hosts must name a host",
+		"executor.ssh.hosts=null": "executor.ssh.hosts must name a host",
 		"executor.ssh.hosts[0].name=NAS,executor.ssh.hosts[0].address=192.0.2.20:22": `"NAS" is not a DNS label`,
-		"executor.ssh.hosts[0].name=nas":                           "nas has no address",
+		"executor.ssh.hosts[0].name=nas":                                             "nas has no address",
 	} {
 		out, err := exec.CommandContext(t.Context(), helm, "template", "mainloop", chart, "--namespace", "mainloop",
-			"--values", filepath.Join(chart, "ci/production-values.yaml"), "--set", "executor.enabled=true",
+			"--values", filepath.Join(chart, "ci/production-values.yaml"), "--set", "executor.enabled=true", "--set", "executor.approvals.mode=web",
 			"--set", "executor.namespace=mainloop-executor", "--set", "executor.ssh.enabled=true", "--set", set).CombinedOutput()
 		if err == nil || !strings.Contains(string(out), want) {
 			t.Errorf("%s renders: %v\n%s", set, err, out)
@@ -328,7 +328,7 @@ func TestExecutorSecretNamespacesRefuseItsOwn(t *testing.T) {
 	}
 	for _, ns := range []string{"mainloop-executor", "mainloop"} {
 		cmd := exec.CommandContext(t.Context(), helm, "template", "mainloop", chart, "--namespace", "mainloop",
-			"--values", filepath.Join(chart, "ci/production-values.yaml"), "--set", "executor.enabled=true",
+			"--values", filepath.Join(chart, "ci/production-values.yaml"), "--set", "executor.enabled=true", "--set", "executor.approvals.mode=web",
 			"--set", "executor.namespace=mainloop-executor", "--set", "executor.secretNamespaces={widgets,"+ns+"}")
 		out, err := cmd.CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "executor.secretNamespaces must not hold the executor's or the release's namespace ("+ns+")") {
@@ -338,8 +338,10 @@ func TestExecutorSecretNamespacesRefuseItsOwn(t *testing.T) {
 }
 
 // Given approval keys pinned in the chart, serve-api (through the shared config) and
-// serve-executor get the same value, which the binary parses; without any, neither has it.
+// serve-executor get the same value, which the binary parses, and the signed mode; in web mode,
+// neither has keys.
 func TestPinnedApprovalKeysReachBothProcesses(t *testing.T) {
+	const mode = "MAINLOOP_PRIVILEGED_APPROVALS_MODE"
 	r := render(t, "production-executor-approvals")
 	api := r.configMaps["mainloop-config"].Data["MAINLOOP_PRIVILEGED_APPROVAL_KEYS"]
 	ex := envByName(r.deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])["MAINLOOP_PRIVILEGED_APPROVAL_KEYS"].Value
@@ -350,33 +352,71 @@ func TestPinnedApprovalKeysReachBothProcesses(t *testing.T) {
 	if err != nil || len(pinned) != 1 || pinned["dev_0123456789abcdefghijklmnop"] == nil {
 		t.Fatalf("ParsePinned = %v, %v", pinned, err)
 	}
-	const required = "MAINLOOP_PRIVILEGED_APPROVAL_KEYS_REQUIRED"
-	if api, ex := r.configMaps["mainloop-config"].Data[required], envByName(r.deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])[required].Value; api != "true" || ex != "true" {
-		t.Errorf("required: serve-api %q, serve-executor %q", api, ex)
+	if api, ex := r.configMaps["mainloop-config"].Data[mode], envByName(r.deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])[mode].Value; api != "signed" || ex != "signed" {
+		t.Errorf("mode: serve-api %q, serve-executor %q", api, ex)
+	}
+	if _, ok := r.configMaps["mainloop-config"].Data["MAINLOOP_PRIVILEGED_APPROVAL_KEYS_REQUIRED"]; ok {
+		t.Error("serve-api still has the removed approval-keys-required flag")
 	}
 
 	r = render(t, "production-executor")
-	for _, key := range []string{"MAINLOOP_PRIVILEGED_APPROVAL_KEYS", required} {
-		if v, ok := r.configMaps["mainloop-config"].Data[key]; ok {
-			t.Errorf("serve-api has %s=%q", key, v)
-		}
-		if v, ok := envByName(r.deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])[key]; ok {
-			t.Errorf("serve-executor has %s=%+v", key, v)
-		}
+	if v, ok := r.configMaps["mainloop-config"].Data["MAINLOOP_PRIVILEGED_APPROVAL_KEYS"]; ok {
+		t.Errorf("serve-api has keys %q in web mode", v)
 	}
+	if v, ok := envByName(r.deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])["MAINLOOP_PRIVILEGED_APPROVAL_KEYS"]; ok {
+		t.Errorf("serve-executor has keys %+v in web mode", v)
+	}
+	if api, ex := r.configMaps["mainloop-config"].Data[mode], envByName(r.deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])[mode].Value; api != "web" || ex != "web" {
+		t.Errorf("mode: serve-api %q, serve-executor %q", api, ex)
+	}
+	// With no executor there is no approval mode to choose.
+	if v, ok := render(t, "production").configMaps["mainloop-config"].Data[mode]; ok {
+		t.Errorf("serve-api has the approval mode %q without an executor", v)
+	}
+}
 
-	// Required with nothing pinned fails closed: the chart doesn't render.
+// The approval mode is chosen, never defaulted: with an executor and no mode the chart refuses to
+// render, so a values change that drops the keys can't fall back to web approvals silently, and the
+// choices that contradict each other fail too.
+func TestApprovalModeIsChosen(t *testing.T) {
 	helm, err := exec.LookPath("helm")
 	if err != nil {
 		t.Skip("helm is not installed")
 	}
-	for _, set := range []string{"executor.approvalKeys.required=true", "executor.approvalKeys.required=true,executor.approvalKeys.pinned=null"} {
-		out, err := exec.CommandContext(t.Context(), helm, "template", "mainloop", chart, "--namespace", "mainloop",
-			"--values", filepath.Join(chart, "ci/production-values.yaml"), "--set", "executor.enabled=true",
-			"--set", "executor.namespace=mainloop-executor", "--set", set).CombinedOutput()
-		if err == nil || !strings.Contains(string(out), "executor.approvalKeys.required needs a key") {
-			t.Errorf("%s renders: %v\n%s", set, err, out)
+	key := []string{
+		"--set", "executor.approvalKeys.pinned[0].kid=dev_0123456789abcdefghijklmnop", "--set", "executor.approvalKeys.pinned[0].kty=EC",
+		"--set", "executor.approvalKeys.pinned[0].crv=P-256", "--set", "executor.approvalKeys.pinned[0].x=VBY4eEqK2i_pljz6fJ7BYbPqbMOb-ZFPzBXzI1_w1mM",
+		"--set", "executor.approvalKeys.pinned[0].y=YNqLInY0XbP0fGgecdIgsmrHXiY9zDnuNAG4ozmCWgQ",
+	}
+	for name, c := range map[string]struct {
+		set  []string
+		want string // "" renders
+	}{
+		"no mode":               {nil, "executor.approvals.mode must be set to web or signed"},
+		"no mode, keys pinned":  {key, "executor.approvals.mode must be set to web or signed"},
+		"unknown mode":          {[]string{"--set", "executor.approvals.mode=optional"}, "executor.approvals.mode must be set to web or signed"},
+		"signed, no key":        {[]string{"--set", "executor.approvals.mode=signed"}, "executor.approvals.mode signed needs a key"},
+		"signed, key unpinned":  {[]string{"--set", "executor.approvals.mode=signed", "--set", "executor.approvalKeys.pinned=null"}, "executor.approvals.mode signed needs a key"},
+		"web with a key":        {append([]string{"--set", "executor.approvals.mode=web"}, key...), "pinned keys make the executor refuse the web app's approvals"},
+		"the removed flag":      {[]string{"--set", "executor.approvals.mode=signed", "--set", "executor.approvalKeys.required=true"}, "executor.approvalKeys.required was replaced by executor.approvals.mode"},
+		"the removed flag, off": {[]string{"--set", "executor.approvals.mode=web", "--set", "executor.approvalKeys.required=false"}, "executor.approvalKeys.required was replaced by executor.approvals.mode"},
+		"web":                   {[]string{"--set", "executor.approvals.mode=web"}, ""},
+		"signed":                {append([]string{"--set", "executor.approvals.mode=signed"}, key...), ""},
+	} {
+		args := append([]string{"template", "mainloop", chart, "--namespace", "mainloop", "--values", filepath.Join(chart, "ci/production-values.yaml"),
+			"--set", "executor.enabled=true", "--set", "executor.namespace=mainloop-executor"}, c.set...)
+		out, err := exec.CommandContext(t.Context(), helm, args...).CombinedOutput()
+		switch {
+		case c.want == "" && err != nil:
+			t.Errorf("%s: does not render: %v\n%s", name, err, out)
+		case c.want != "" && (err == nil || !strings.Contains(string(out), c.want)):
+			t.Errorf("%s: renders, or fails otherwise (want %q): %v\n%s", name, c.want, err, out)
 		}
+	}
+	// Without an executor the mode is not needed.
+	if out, err := exec.CommandContext(t.Context(), helm, "template", "mainloop", chart, "--namespace", "mainloop",
+		"--values", filepath.Join(chart, "ci/production-values.yaml")).CombinedOutput(); err != nil {
+		t.Errorf("no executor: %v\n%s", err, out)
 	}
 }
 
@@ -415,7 +455,7 @@ func TestExecutorUniFi(t *testing.T) {
 	}
 	for _, addr := range []string{"", "unifi.example.com:443", "192.0.2.2"} {
 		out, err := exec.CommandContext(t.Context(), helm, "template", "mainloop", chart, "--namespace", "mainloop",
-			"--values", filepath.Join(chart, "ci/production-values.yaml"), "--set", "executor.enabled=true",
+			"--values", filepath.Join(chart, "ci/production-values.yaml"), "--set", "executor.enabled=true", "--set", "executor.approvals.mode=web",
 			"--set", "executor.namespace=mainloop-executor", "--set", "executor.unifi.enabled=true", "--set-string", "executor.unifi.address="+addr).CombinedOutput()
 		if err == nil || !strings.Contains(string(out), "executor.unifi.address must be the console's IP:port") {
 			t.Errorf("%q renders: %v\n%s", addr, err, out)

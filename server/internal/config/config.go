@@ -72,9 +72,11 @@ type Config struct {
 	// serve-executor's). With any pinned, serve-api accepts an approval of an executor type only
 	// from a phone whose key is pinned, signed with it.
 	PrivilegedApprovalKeys string `env:"MAINLOOP_PRIVILEGED_APPROVAL_KEYS"`
-	// PrivilegedApprovalKeysRequired refuses to start without a pinned approval key, and takes an
-	// executor type's approval only with a pinned key's signature.
-	PrivilegedApprovalKeysRequired ExactTrue `env:"MAINLOOP_PRIVILEGED_APPROVAL_KEYS_REQUIRED"`
+	// PrivilegedApprovalsMode is "web" (no key pinned; an executor type is approved from the web
+	// app, with no signature to check) or "signed" (a key pinned; an executor type's approval
+	// needs a pinned key's signature). Required when PrivilegedExecutorEnabled: the process refuses
+	// to start without it.
+	PrivilegedApprovalsMode ApprovalsMode `env:"MAINLOOP_PRIVILEGED_APPROVALS_MODE"`
 	// PrivilegedSSHEnabled accepts command.ssh: the executor reaches home-network hosts over ssh
 	// (executor.ssh in the chart).
 	PrivilegedSSHEnabled ExactTrue `env:"MAINLOOP_PRIVILEGED_EXECUTOR_SSH_ENABLED"`

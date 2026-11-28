@@ -278,6 +278,18 @@ func TestApprovedMergeRunsOnceAndReports(t *testing.T) {
 		!strings.Contains(e.sender.msgs[0].text, "ended: succeeded") {
 		t.Fatalf("messages = %+v", e.sender.msgs)
 	}
+	// An answer from the web app records the web channel, and the agent is told so.
+	if got.ApprovalChannel == nil || *got.ApprovalChannel != privileged.ChannelWeb ||
+		!strings.Contains(e.sender.msgs[0].text, "The owner approved it from the web app (no Touch ID).") {
+		t.Errorf("channel %v, message %q", got.ApprovalChannel, e.sender.msgs[0].text)
+	}
+	d, err := (&privileged.PrivilegedAPI{Pool: e.db.Pool, OwnerID: owner}).GetPrivilegedAction(context.Background(), api.GetPrivilegedActionRequestObject{ActionId: a.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ch := d.(api.GetPrivilegedAction200JSONResponse).Action.ApprovalChannel; ch == nil || *ch != api.PrivilegedApprovalChannelWeb {
+		t.Errorf("audit channel = %v", ch)
+	}
 	if n := len(e.openItems(t)); n != 0 {
 		t.Errorf("open cards = %d", n)
 	}
@@ -288,6 +300,9 @@ func TestApprovedMergeRunsOnceAndReports(t *testing.T) {
 	}
 	if strings.Join(steps, ",") != "requested,preflighted,decided,claimed,executed,delivered" {
 		t.Errorf("events = %v", steps)
+	}
+	if !strings.Contains(evs[2].Detail, "from the web app (no Touch ID)") {
+		t.Errorf("decided event = %q", evs[2].Detail)
 	}
 }
 

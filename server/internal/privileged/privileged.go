@@ -67,6 +67,27 @@ const (
 // DeliveryStates lists every delivery state, for the schema check test.
 var DeliveryStates = []string{DeliveryNone, DeliveryPending, DeliveryDelivered, DeliveryUndeliverable}
 
+// The channel an approval came through, recorded with it (privileged_actions.approval_channel):
+// the web app, whose answer carries no signature, or a phone's, signed with Touch ID.
+const (
+	ChannelWeb         = "web"
+	ChannelPhoneSigned = "phone-signed"
+)
+
+// Channels lists every approval channel, for the schema check test.
+var Channels = []string{ChannelWeb, ChannelPhoneSigned}
+
+// ChannelText is a channel in words, for the agent's message and view: how the owner approved.
+func ChannelText(channel string) string {
+	switch channel {
+	case ChannelWeb:
+		return "from the web app (no Touch ID)"
+	case ChannelPhoneSigned:
+		return "on their phone, signed with Touch ID"
+	}
+	return ""
+}
+
 // The card's answers. Any answer other than Approve is a denial; its text is the note.
 const (
 	AnswerApprove = "Approve"
@@ -142,11 +163,13 @@ type Action struct {
 	Digest       string
 	ExpiresAt    time.Time
 	DecisionNote *string
-	Result       json.RawMessage
-	LastError    *string
-	CreatedAt    time.Time
-	FinishedAt   *time.Time
-	QueueItemID  string
+	// ApprovalChannel is how the owner approved (ChannelWeb or ChannelPhoneSigned); nil until then.
+	ApprovalChannel *string
+	Result          json.RawMessage
+	LastError       *string
+	CreatedAt       time.Time
+	FinishedAt      *time.Time
+	QueueItemID     string
 	// Replayed is set when the call returned an action made earlier: the same request id, or an
 	// undecided action of the same session with the same arguments.
 	Replayed bool
@@ -514,7 +537,7 @@ func (s *Service) Cancel(ctx context.Context, sessionID, id string) (Action, err
 func fromRow(r dbq.PrivilegedAction) Action {
 	a := Action{
 		ID: r.ID, RequestID: r.RequestID, Type: r.Type, State: r.State, Args: r.Args, Reason: r.Reason,
-		Facts: r.FrozenFacts, ExpiresAt: r.ExpiresAt, DecisionNote: r.DecisionNote, Result: r.Result,
+		Facts: r.FrozenFacts, ExpiresAt: r.ExpiresAt, DecisionNote: r.DecisionNote, ApprovalChannel: r.ApprovalChannel, Result: r.Result,
 		LastError: r.LastError, CreatedAt: r.CreatedAt, FinishedAt: r.FinishedAt, QueueItemID: QueueIDPrefix + r.ID,
 	}
 	if r.Digest != nil {

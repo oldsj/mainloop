@@ -647,6 +647,26 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/privileged-actions/approval-mode': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * Get Privileged Approval Mode
+     * @description How this instance takes the owner's approval of the executor's action types (docs/specs/privileged-actions.md, "Approval channels"). `web` runs an approval the web app recorded, with no signature to check; `signed` runs only an approval a pinned phone signed with Touch ID. `null` when no executor is deployed.
+     */
+    get: operations['getPrivilegedApprovalMode'];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/privileged-actions/{action_id}': {
     parameters: {
       query?: never;
@@ -2307,6 +2327,17 @@ export interface components {
       | 'expired'
       | 'cancelled'
       | 'uncertain';
+    /**
+     * PrivilegedApprovalChannel
+     * @description How the owner approved: `web` from the web app, whose answer carries no signature, or `phone-signed` from a phone, with a token its Touch ID approval key signed.
+     * @enum {string}
+     */
+    PrivilegedApprovalChannel: 'web' | 'phone-signed';
+    /** PrivilegedApprovalMode */
+    PrivilegedApprovalMode: {
+      /** @description `web`: the executor runs approvals the web app recorded, so a compromised serve-api could approve an action itself. `signed`: only an approval a pinned phone signed. Null when no executor is deployed. */
+      mode: ('web' | 'signed') | null;
+    };
     /** PrivilegedActionSummary */
     PrivilegedActionSummary: {
       id: string;
@@ -2327,6 +2358,8 @@ export interface components {
       decided_at: string | null;
       finished_at: string | null;
       decision_note: string | null;
+      /** @description How the owner approved; null until an approval. */
+      approval_channel: components['schemas']['PrivilegedApprovalChannel'] | null;
       last_error: string | null;
     };
     /** PrivilegedActionDetail */
@@ -9150,6 +9183,36 @@ export interface operations {
         };
         content: {
           'application/json': components['schemas']['PrivilegedActionSummary'][];
+        };
+      };
+      401: components['responses']['Unauthorized'];
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['HTTPError'];
+        };
+      };
+    };
+  };
+  getPrivilegedApprovalMode: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          'application/json': components['schemas']['PrivilegedApprovalMode'];
         };
       };
       401: components['responses']['Unauthorized'];

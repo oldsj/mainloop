@@ -19,16 +19,9 @@ data:
   {{- if .Values.executor.omni.enabled }}
   {{- $_ := set $data "MAINLOOP_PRIVILEGED_EXECUTOR_OMNI_ENABLED" "true" }}
   {{- end }}
-  {{- with .Values.executor.approvalKeys }}
-  {{- if and .required (not .pinned) }}
-  {{- fail "executor.approvalKeys.required needs a key in executor.approvalKeys.pinned" }}
-  {{- end }}
-  {{- with .pinned }}
+  {{- $_ := set $data "MAINLOOP_PRIVILEGED_APPROVALS_MODE" .Values.executor.approvals.mode }}
+  {{- with .Values.executor.approvalKeys.pinned }}
   {{- $_ := set $data "MAINLOOP_PRIVILEGED_APPROVAL_KEYS" (toJson .) }}
-  {{- end }}
-  {{- if .required }}
-  {{- $_ := set $data "MAINLOOP_PRIVILEGED_APPROVAL_KEYS_REQUIRED" "true" }}
-  {{- end }}
   {{- end }}
   {{- if .Values.executor.ssh.enabled }}
   {{- $_ := set $data "MAINLOOP_PRIVILEGED_EXECUTOR_SSH_ENABLED" "true" }}

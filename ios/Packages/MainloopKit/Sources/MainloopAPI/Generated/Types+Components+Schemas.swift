@@ -26,6 +26,13 @@ extension Components {
             case cancelled = "cancelled"
             case uncertain = "uncertain"
         }
+        /// How the owner approved: `web` from the web app, whose answer carries no signature, or `phone-signed` from a phone, with a token its Touch ID approval key signed.
+        ///
+        /// - Remark: Generated from `#/components/schemas/PrivilegedApprovalChannel`.
+        @frozen public enum PrivilegedApprovalChannel: String, Codable, Hashable, Sendable, CaseIterable {
+            case web = "web"
+            case phoneSigned = "phone-signed"
+        }
         /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary`.
         public struct PrivilegedActionSummary: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/id`.
@@ -60,6 +67,10 @@ extension Components {
             public var finishedAt: Foundation.Date?
             /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/decision_note`.
             public var decisionNote: Swift.String?
+            /// How the owner approved; null until an approval.
+            ///
+            /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/approval_channel`.
+            public var approvalChannel: Components.Schemas.PrivilegedApprovalChannel?
             /// - Remark: Generated from `#/components/schemas/PrivilegedActionSummary/last_error`.
             public var lastError: Swift.String?
             /// Creates a new `PrivilegedActionSummary`.
@@ -78,6 +89,7 @@ extension Components {
             ///   - decidedAt:
             ///   - finishedAt:
             ///   - decisionNote:
+            ///   - approvalChannel: How the owner approved; null until an approval.
             ///   - lastError:
             public init(
                 id: Swift.String,
@@ -93,6 +105,7 @@ extension Components {
                 decidedAt: Foundation.Date? = nil,
                 finishedAt: Foundation.Date? = nil,
                 decisionNote: Swift.String? = nil,
+                approvalChannel: Components.Schemas.PrivilegedApprovalChannel? = nil,
                 lastError: Swift.String? = nil
             ) {
                 self.id = id
@@ -108,6 +121,7 @@ extension Components {
                 self.decidedAt = decidedAt
                 self.finishedAt = finishedAt
                 self.decisionNote = decisionNote
+                self.approvalChannel = approvalChannel
                 self.lastError = lastError
             }
             public enum CodingKeys: String, CodingKey {
@@ -124,6 +138,7 @@ extension Components {
                 case decidedAt = "decided_at"
                 case finishedAt = "finished_at"
                 case decisionNote = "decision_note"
+                case approvalChannel = "approval_channel"
                 case lastError = "last_error"
             }
         }
