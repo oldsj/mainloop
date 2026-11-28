@@ -1,0 +1,22 @@
+#!/bin/bash
+# Fails when the toolbox's kubectl, omnictl or talosctl pins differ from server/Dockerfile's, so
+# the executor's own binaries and the toolbox's never drift apart.
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+status=0
+for v in KUBECTL OMNICTL TALOSCTL; do
+	want=$(grep -oE "ARG ${v}_VERSION=\S+" server/Dockerfile | cut -d= -f2)
+	got=$(grep -oE "^${v}_VERSION=\S+" images/toolbox/install-tools | cut -d= -f2)
+	if [[ -z ${want} || ${want} != "${got}" ]]; then
+		echo "${v}_VERSION: server/Dockerfile ${want:-?}, toolbox ${got:-?}" >&2
+		status=1
+	fi
+	for a in AMD64 ARM64; do
+		want=$(grep -oE "ARG ${v}_SHA256_${a}=\S+" server/Dockerfile | cut -d= -f2)
+		if [[ -z ${want} ]] || ! grep -qF "${want}" images/toolbox/install-tools; then
+			echo "${v} ${a} checksum differs from server/Dockerfile" >&2
+			status=1
+		fi
+	done
+done
+exit "${status}"
