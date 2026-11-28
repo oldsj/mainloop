@@ -60,6 +60,9 @@ type OIDC struct {
 	keys    map[string]jwk
 	fetched time.Time
 	tried   time.Time
+	// fetchErr is the last fetch's error while no keys are held, so a token met within
+	// keysRetryEvery of a failed first fetch is told why, not that its key is unknown.
+	fetchErr error
 }
 
 type jwk struct {
@@ -112,6 +115,10 @@ func (o *OIDC) now() time.Time {
 
 // key returns the signing key for kid, fetching the key set when it is missing, stale or lacks kid,
 // at most once per keysRetryEvery. A failed fetch keeps the keys already held.
+//
+// The fetch outlives the request that asked for it (its own fetchTimeout still bounds it): the key
+// set is shared, so a client that goes away, such as a browser dropping its event stream, must not
+// fail the fetch and leave every other request without keys until the next retry.
 func (o *OIDC) key(ctx context.Context, kid string) (jwk, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
@@ -120,13 +127,19 @@ func (o *OIDC) key(ctx context.Context, kid string) (jwk, error) {
 	stale := o.keys == nil || now.Sub(o.fetched) > keysMaxAge
 	if (stale || !found) && now.Sub(o.tried) >= keysRetryEvery {
 		o.tried = now
-		keys, err := o.fetch(ctx)
+		keys, err := o.fetch(context.WithoutCancel(ctx))
 		if err == nil {
-			o.keys, o.fetched = keys, now
+			o.keys, o.fetched, o.fetchErr = keys, now, nil
 			k, found = o.lookup(kid)
 		} else if !found {
+			if o.keys == nil {
+				o.fetchErr = err
+			}
 			return jwk{}, fmt.Errorf("signing keys unavailable: %w", err)
 		}
+	}
+	if !found && o.keys == nil && o.fetchErr != nil {
+		return jwk{}, fmt.Errorf("signing keys unavailable: %w", o.fetchErr)
 	}
 	if !found {
 		return jwk{}, fmt.Errorf("unknown signing key %q", kid)

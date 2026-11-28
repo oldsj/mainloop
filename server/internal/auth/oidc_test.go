@@ -98,8 +98,35 @@ func TestOIDCUnreachableIssuerFailsClosed(t *testing.T) {
 	iss := authtest.NewIssuer(t)
 	iss.SetDown(true)
 	tok := iss.Sign(t, authtest.Claims{"sub": "s", "aud": "mainloop"})
-	_, err := newOIDC(iss).Verify(context.Background(), tok)
+	o := newOIDC(iss)
+	_, err := o.Verify(context.Background(), tok)
 	if err == nil || !strings.Contains(err.Error(), "signing keys unavailable") {
 		t.Fatalf("err = %v", err)
+	}
+	// Within the retry period, with no keys held, the next token is told the same, not that its
+	// key is unknown.
+	if _, err := o.Verify(context.Background(), tok); err == nil || !strings.Contains(err.Error(), "signing keys unavailable") {
+		t.Fatalf("second err = %v", err)
+	}
+}
+
+// The first request after a start can be one its client abandons, such as a browser dropping an
+// event stream on reload. Its key fetch still completes, so the requests behind it verify.
+func TestOIDCKeyFetchOutlivesACanceledRequest(t *testing.T) {
+	iss := authtest.NewIssuer(t)
+	o := newOIDC(iss)
+	tok := iss.Sign(t, authtest.Claims{"sub": "s", "aud": "mainloop"})
+
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := o.Verify(gone, tok); err != nil {
+		t.Fatalf("verify with a canceled request: %v", err)
+	}
+	before := iss.KeyFetches.Load()
+	if _, err := o.Verify(context.Background(), tok); err != nil {
+		t.Fatalf("next request: %v", err)
+	}
+	if got := iss.KeyFetches.Load() - before; got != 0 {
+		t.Fatalf("key fetches = %d, want the first request's keys reused", got)
 	}
 }
