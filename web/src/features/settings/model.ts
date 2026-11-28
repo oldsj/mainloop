@@ -12,7 +12,12 @@ export type ProviderProfile = Schemas['ProviderProfile'];
 /** The roles, in the order the form lists them, with what each covers. */
 export const ROLES: readonly { id: SessionDefaultRole; label: string; covers: string }[] = [
   { id: 'main', label: 'Main thread', covers: 'The Mainloop chat.' },
-  { id: 'worker', label: 'Workers', covers: 'Every task session, supervisors included.' }
+  {
+    id: 'supervisor',
+    label: 'Supervisors',
+    covers: 'Tasks without a parent, and project supervisors. Unset, they use the worker default.'
+  },
+  { id: 'worker', label: 'Workers', covers: 'Every other task session.' }
 ];
 
 /** The default the owner set for one role and provider, or one with both fields left to the provider. */

@@ -237,7 +237,7 @@ SELECT d.id, d.session_id, d.state, d.task_id, d.evidence_ref, d.created_at, d.u
        b.kind AS binding_kind, coalesce(b.role::text, '')::text AS binding_role,
        b.credential_identity,
        b.model_override, b.effort_override,
-       sd.model AS default_model, sd.effort AS default_effort,
+       coalesce(sd.model, sw.model) AS default_model, coalesce(sd.effort, sw.effort) AS default_effort,
        coalesce(b.mcp_grant_kind::text, '')::text AS binding_grant, s.user_id, s.title AS session_title,
        w.id AS workspace_id,
        coalesce(b.kagent_agent_namespace, w.agent_namespace, '') AS resolved_agent_namespace,
@@ -247,10 +247,14 @@ FROM deliveries d
 JOIN sessions s ON s.id = d.session_id
 LEFT JOIN agent_bindings b ON b.session_id = d.session_id
 LEFT JOIN workspaces w ON w.id = d.session_id
--- The owner's default for the session's role and provider (a binding with no kind is Claude's).
+-- The owner's default for the session's role and provider (a binding with no kind is Claude's). A
+-- supervisor with no supervisor default for a field falls back to the worker default for it.
 LEFT JOIN session_defaults sd ON sd.user_id = s.user_id
-    AND sd.role = CASE WHEN b.role = 'main' THEN 'main' ELSE 'worker' END
+    AND sd.role = CASE b.role WHEN 'main' THEN 'main' WHEN 'supervisor' THEN 'supervisor' ELSE 'worker' END
     AND sd.provider = coalesce(nullif(b.kind, ''), 'claude')
+LEFT JOIN session_defaults sw ON sw.user_id = s.user_id
+    AND b.role = 'supervisor' AND sw.role = 'worker'
+    AND sw.provider = coalesce(nullif(b.kind, ''), 'claude')
 WHERE d.id = $1;
 
 -- name: ListSessionDefaults :many

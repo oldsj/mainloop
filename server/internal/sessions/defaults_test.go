@@ -87,6 +87,63 @@ func TestTurnsUseTheRoleDefaultUnderTheSessionOverride(t *testing.T) {
 	wantMeta(t, "cleared", log.last(t), "", "")
 }
 
+// A supervisor (a task without a parent) takes the supervisor default, field by field, then the
+// worker default; the override still wins; a worker never takes the supervisor's.
+func TestSupervisorTurnsFallBackFromSupervisorToWorkerDefaults(t *testing.T) {
+	var log metaLog
+	e := newEnv(t, metaOpt(t, &log))
+	e.withProviders()
+	ctx := context.Background()
+	sup := e.newSession("plan")
+	worker := e.newSession("code")
+	e.run()
+	e.waitState(e.firstDelivery(sup), dbstate.DeliveryCompleted)
+	if _, err := e.pool.Exec(ctx, `UPDATE agent_bindings SET role = 'supervisor' WHERE session_id = $1`, sup); err != nil {
+		t.Fatal(err)
+	}
+	e.waitState(e.firstDelivery(worker), dbstate.DeliveryCompleted)
+
+	// With only a worker default, a supervisor uses it: owners who never set supervisor see no change.
+	if _, err := e.setDefault("worker", "claude", strp("claude-sonnet-5-5"), effortp("high")); err != nil {
+		t.Fatal(err)
+	}
+	e.sendTurn(sup, "worker fallback")
+	wantMeta(t, "supervisor, worker default only", log.last(t), "claude-sonnet-5-5", "high")
+
+	// A supervisor default wins over the worker's, and the worker keeps its own.
+	if _, err := e.setDefault("supervisor", "claude", strp("claude-opus-5-5"), effortp("medium")); err != nil {
+		t.Fatal(err)
+	}
+	e.sendTurn(sup, "supervisor default")
+	wantMeta(t, "supervisor default", log.last(t), "claude-opus-5-5", "medium")
+	e.sendTurn(worker, "worker turn")
+	wantMeta(t, "worker unaffected", log.last(t), "claude-sonnet-5-5", "high")
+
+	// The session's own override wins over both.
+	if _, err := e.setEffort(sup, effortp("low")); err != nil {
+		t.Fatal(err)
+	}
+	e.sendTurn(sup, "override")
+	wantMeta(t, "override wins", log.last(t), "claude-opus-5-5", "low")
+
+	// A field the supervisor default leaves unset takes the worker's.
+	if _, err := e.setEffort(sup, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.setDefault("supervisor", "claude", strp("claude-opus-5-5"), nil); err != nil {
+		t.Fatal(err)
+	}
+	e.sendTurn(sup, "partial")
+	wantMeta(t, "effort falls back to worker", log.last(t), "claude-opus-5-5", "high")
+
+	// Removing the supervisor default returns to the worker's.
+	if _, err := e.setDefault("supervisor", "claude", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.sendTurn(sup, "removed")
+	wantMeta(t, "supervisor default removed", log.last(t), "claude-sonnet-5-5", "high")
+}
+
 func TestSetSessionDefaultRefusesWhatTheProviderDoesNotOffer(t *testing.T) {
 	e := newEnv(t)
 	e.withProviders()

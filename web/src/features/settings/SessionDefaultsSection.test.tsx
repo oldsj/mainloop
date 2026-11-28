@@ -58,12 +58,29 @@ function renderSection() {
 const field = (name: string) => screen.findByRole('combobox', { name });
 
 describe('session defaults', () => {
+  it('saves a supervisor default on its own, leaving the worker one', async () => {
+    const puts = serve([
+      { role: 'worker', provider: 'claude', model: 'claude-opus-5', effort: null }
+    ]);
+    const user = renderSection();
+    expect(await field('Workers, Claude Code: model')).toHaveValue('claude-opus-5');
+    expect(await field('Supervisors, Claude Code: model')).toHaveValue('');
+    await user.selectOptions(await field('Supervisors, Claude Code: effort'), 'high');
+    await waitFor(() =>
+      expect(puts).toEqual([
+        { role: 'supervisor', provider: 'claude', model: null, effort: 'high' }
+      ])
+    );
+    expect(await field('Workers, Claude Code: model')).toHaveValue('claude-opus-5');
+  });
+
   it('lists a model and an effort for each role and enabled provider', async () => {
     serve([], [CLAUDE_PROFILE, { ...CODEX_PROFILE, enabled: false }]);
     renderSection();
     const main = await screen.findByRole('group', { name: 'Main thread' });
+    const supervisors = screen.getByRole('group', { name: 'Supervisors' });
     const workers = screen.getByRole('group', { name: 'Workers' });
-    for (const group of [main, workers]) {
+    for (const group of [main, supervisors, workers]) {
       expect(within(group).getAllByRole('combobox')).toHaveLength(2);
       expect(within(group).getByText('Claude Code')).toBeInTheDocument();
       expect(within(group).queryByText('Codex')).toBeNull();

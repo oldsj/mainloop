@@ -62,20 +62,26 @@ The A2A message that starts a turn carries the override as metadata, keyed `kage
 
 The owner can set a default model and reasoning effort by role and provider profile:
 `GET /session-defaults` lists them, and `PUT /session-defaults` sets one
-(`{"role": "main"|"worker", "provider": "<profile id>", "model": "<name>"|null, "effort": "<level>"|null}`;
-both `null` removes it) and answers with all of them. `main` is the main thread; `worker` is every
-other session, task sessions and supervisors alike. They are keyed by provider because model names
+(`{"role": "main"|"supervisor"|"worker", "provider": "<profile id>", "model": "<name>"|null, "effort": "<level>"|null}`;
+both `null` removes it) and answers with all of them. `main` is the main thread; `supervisor` is a
+task without a parent (a root task's session, a project's standing supervisor included), the
+planning role; `worker` is every other session, the code workers under a supervisor. They are keyed by provider because model names
 and effort levels differ between providers: a Claude default never applies to a Codex session.
 The provider must be a configured profile and the effort one of its `effort_levels` (`422`
 otherwise); the model is checked only against the contract's pattern, as `/model` is.
 
 A turn's model is the session's `/model` override if set, else the default for its role and
-provider, else none (the Agent's ModelConfig model); effort resolves the same way. The default is
-read when each turn starts, not copied into the session, so:
+provider, else none (the Agent's ModelConfig model); effort resolves the same way. A supervisor's
+turn resolves each of the two in this order: its own override; the `supervisor` default for its
+provider; the `worker` default; none. So an owner who never sets `supervisor` sees no change, one
+who sets only a model keeps the worker's effort, and a `worker` default never reaches a main thread
+and a `supervisor` default never reaches a worker. An example: supervisors on `claude-opus-5-5` at
+`medium`, workers on `claude-sonnet-5-5` at `high`. The default is read when each turn starts, not
+copied into the session, so:
 
 - a change to a default reaches running sessions from their next turn;
 - `/model default` and `/effort default` clear the session's override back to the role default
-  (or the provider's, when there is none);
+  (a supervisor's falls through to the worker default; the provider's, when there is none);
 - a delegation's `model` and `effort` are overrides and win over the default.
 
 An effort its provider stopped offering (the profile changed after it was set, as when the built-in
@@ -83,13 +89,13 @@ Codex profile dropped `minimal`) is left out of the turn rather than failing it:
 falls back to the default, and a default to the provider's.
 
 **Settings page (implemented, checked against MSW, not a live backend).** `/settings` has a
-**Session defaults** section: for **Main thread** and for **Workers**, one row per enabled provider
+**Session defaults** section: for **Main thread**, **Supervisors** and **Workers**, one row per enabled provider
 profile with a **Model** and an **Effort** select. Each select's first choice is
 **Provider default (<the profile's own default>)**, which sends `null` for that field; the profile's
 default is named as a hint only, since it is never sent. The choices are the profile's `models` and
 `effort_levels` from `GET /providers`. A choice saves as it is made, with one `PUT` for that role and
 provider carrying both fields, so setting one never clears the other; both back to the provider
-default removes the row's default. The row says **Saving…**, then **Saved.**, or **Not saved** with
+default removes the row's default. The Supervisors group says, in its caption, that unset they use the worker default. The row says **Saving…**, then **Saved.**, or **Not saved** with
 the server's reason, in which case the select returns to what was saved. A saved model the profile
 does not list stays selectable, and a saved effort the profile stopped offering is shown with a note
 that turns leave the effort to the provider. Below it, **Import a project** (`#import-project`)
@@ -114,7 +120,9 @@ default for its role and provider, or the provider. The composer names it, per f
   A session's own choice is shown bare, a role default with whose it is, and the provider's as
   `default`, since nothing is sent for it.
 
-The main thread falls under the `main` defaults and every other session under `worker`. An effort
+The main thread falls under the `main` defaults, a supervisor under `supervisor` (with a
+`worker` default for a field it leaves unset noted as `(worker default)`), and every other session
+under `worker`. An effort
 the provider no longer offers reads as the turn treats it: a session's own as the default, a
 default as the provider's. Until the
 owner's defaults have been read the composer says nothing about them.

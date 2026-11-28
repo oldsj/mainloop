@@ -1182,7 +1182,7 @@ export interface paths {
     };
     /**
      * List Session Defaults
-     * @description The owner's default model and reasoning effort for new turns, by role (`main` for the main thread, `worker` for every task session) and provider profile. A turn uses the session's own `/model` or `/effort` override when set, else the default for its role and provider, else the provider's own default. Read at each turn, so a change reaches running sessions from their next turn.
+     * @description The owner's default model and reasoning effort for new turns, by role (`main` for the main thread, `supervisor` for tasks without a parent, `worker` for every other task session) and provider profile. A turn uses the session's own `/model` or `/effort` override when set, else the default for its role and provider, else the provider's own default. A supervisor with no `supervisor` default for a field uses the `worker` one. Read at each turn, so a change reaches running sessions from their next turn.
      */
     get: operations['listSessionDefaults'];
     /**
@@ -4304,10 +4304,10 @@ export interface components {
     };
     /**
      * SessionDefaultRole
-     * @description Which sessions a default applies to, the main thread or every task session.
+     * @description Which sessions a default applies to: the main thread, supervisors (tasks without a parent, project standing supervisors included), or the worker sessions under them. A supervisor with no `supervisor` default falls back to the `worker` one.
      * @enum {string}
      */
-    SessionDefaultRole: 'main' | 'worker';
+    SessionDefaultRole: 'main' | 'supervisor' | 'worker';
     /** Seen */
     Seen: {
       /**
