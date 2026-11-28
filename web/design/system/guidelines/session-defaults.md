@@ -4,7 +4,7 @@ Source: `docs/specs/chat.md` (Session defaults).
 
 ## Purpose
 
-The Settings section where the owner chooses the model and reasoning effort new turns use, by role (the main thread, or every worker) and provider. It is the default under a session's own `/model` and `/effort`.
+The Settings section where the owner chooses the model and reasoning effort new turns use, by role (the main thread, supervisors, or every worker) and provider. It is the default under a session's own `/model` and `/effort`.
 
 ## Tokens
 

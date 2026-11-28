@@ -43,8 +43,9 @@ export interface ThreadBodyProps {
   /** The session controls chip, shown with the composer. Only the main thread has one. */
   controls?: ReactNode;
   /**
-   * Which of the owner's session defaults this thread falls under: the main thread's, or a
-   * worker's (every other session). The composer's model and effort line names it.
+   * Which of the owner's session defaults this thread falls under: the main thread's, a
+   * supervisor's, or a worker's (every other session). Left out, it follows the thread's role. The
+   * composer's model and effort line names it.
    */
   defaultsRole?: DefaultsRole;
 }
@@ -65,11 +66,13 @@ export function ThreadBody({
   commandNotice = null,
   commands,
   controls,
-  defaultsRole = 'worker'
+  defaultsRole: explicitRole
 }: ThreadBodyProps) {
   const live = useLiveTurn(thread.sessionId, thread.busy, thread.messages);
   // The line says whose choice each value is: the session's own, the owner's default for its role,
   // or the provider's. Until the owner's defaults are read it shows the session's own choice only.
+  const defaultsRole: DefaultsRole =
+    explicitRole ?? (thread.native?.role === 'supervisor' ? 'supervisor' : 'worker');
   const run = useRunDefaults(defaultsRole, thread.native);
   const modelEffort = !thread.native
     ? null

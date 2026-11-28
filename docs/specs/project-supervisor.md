@@ -105,8 +105,8 @@ with `project_settings`. The supervisor cannot change it.
 project, or main does for the owner with `project_settings` (`supervisor`). The supervisor cannot.
 
 - **Defaults.** A null provider is the project's default provider, else the installation's. A null
-  model or effort is the owner's `worker` [session default](chat.md#session-defaults) for that
-  provider, else the provider's own.
+  model or effort is the owner's `supervisor` [session default](chat.md#session-defaults) for that
+  provider, else the owner's `worker` one, else the provider's own.
 - **Validation.** They are checked as `delegate` checks them, against the provider they resolve to:
   `422 provider_unknown`, `provider_role_unavailable` or `provider_disabled`, `model_unavailable`
   (with `allowed_models`) or `effort_unavailable` (with `allowed_effort_levels`). A refusal changes

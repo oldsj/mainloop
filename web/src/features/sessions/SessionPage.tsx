@@ -176,8 +176,10 @@ export function SessionPage({
   const tasks = useTasks();
   const actions = useSessionActions(id);
   const native = useNativeSession(id);
-  // Every session but the main thread falls under the owner's worker defaults.
-  const run = useRunDefaults('worker', native.data);
+  // A supervisor falls under the owner's supervisor defaults (the worker ones when it has none),
+  // every other session but the main thread under the worker ones.
+  const defaultsRole = native.data?.role === 'supervisor' ? 'supervisor' : 'worker';
+  const run = useRunDefaults(defaultsRole, native.data);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [chatView, setChatView] = useState(false);
@@ -326,7 +328,7 @@ export function SessionPage({
           <LiveWithRequests
             sessionId={session.id}
             onFallback={() => setChatView(true)}
-            notes={run ? { ...runNotes(run, 'worker'), recorded: runRecorded(run) } : undefined}
+            notes={run ? { ...runNotes(run, defaultsRole), recorded: runRecorded(run) } : undefined}
           />
         </PanelBoundary>
       ) : (

@@ -12,8 +12,8 @@ import {
 } from './model';
 
 describe('session defaults form rules', () => {
-  it('lists the main thread, then workers', () => {
-    expect(ROLES.map((role) => role.id)).toEqual(['main', 'worker']);
+  it('lists the main thread, then supervisors, then workers', () => {
+    expect(ROLES.map((role) => role.id)).toEqual(['main', 'supervisor', 'worker']);
   });
 
   it('reads the default for a role and provider, or one left to the provider', () => {

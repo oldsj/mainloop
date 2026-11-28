@@ -19,6 +19,8 @@ export interface RunField {
   /** The value that source names, or null when it is the provider's (which Mainloop does not send). */
   value: string | null;
   source: DefaultSource;
+  /** Only for a role default that is another role's: a supervisor with none of its own uses the worker's. */
+  from?: DefaultsRole;
 }
 
 export interface RunDefaults {
@@ -34,11 +36,14 @@ export interface SessionOverrides {
 }
 
 function field(
+  role: DefaultsRole,
   override: string | null | undefined,
-  roleDefault: string | null | undefined
+  roleDefaults: readonly (readonly [DefaultsRole, string | null | undefined])[]
 ): RunField {
   if (override) return { value: override, source: 'session' };
-  if (roleDefault) return { value: roleDefault, source: 'role' };
+  for (const [from, value] of roleDefaults) {
+    if (value) return from === role ? { value, source: 'role' } : { value, source: 'role', from };
+  }
   return { value: null, source: 'provider' };
 }
 
@@ -53,21 +58,41 @@ export function runDefaults(
   role: DefaultsRole,
   efforts?: readonly string[]
 ): RunDefaults {
-  const row = defaults?.find((d) => d.role === role && d.provider === session?.kind);
+  const rowFor = (r: DefaultsRole) =>
+    defaults?.find((d) => d.role === r && d.provider === session?.kind);
+  // A supervisor with no supervisor default for a field uses the worker default for it.
+  const roles: DefaultsRole[] = role === 'supervisor' ? ['supervisor', 'worker'] : [role];
   const offered = (effort: string | null | undefined) =>
     effort && (!efforts || efforts.includes(effort)) ? effort : null;
   return {
-    model: field(session?.model_override, row?.model),
-    effort: field(offered(session?.effort_override), offered(row?.effort))
+    model: field(
+      role,
+      session?.model_override,
+      roles.map((r) => [r, rowFor(r)?.model] as const)
+    ),
+    effort: field(
+      role,
+      offered(session?.effort_override),
+      roles.map((r) => [r, offered(rowFor(r)?.effort)] as const)
+    )
   };
 }
 
-const ROLE_WORDS: Record<DefaultsRole, string> = { main: 'main default', worker: 'worker default' };
+const ROLE_WORDS: Record<DefaultsRole, string> = {
+  main: 'main default',
+  supervisor: 'supervisor default',
+  worker: 'worker default'
+};
 
 /** The words for a source: "this session", "main default", "worker default" or "provider default". */
 export function sourceWords(source: DefaultSource, role: DefaultsRole): string {
   if (source === 'session') return 'this session';
   return source === 'role' ? ROLE_WORDS[role] : 'provider default';
+}
+
+/** The words for a field's source, naming the role the default came from. */
+function fieldWords(run: RunField, role: DefaultsRole): string {
+  return sourceWords(run.source, run.from ?? role);
 }
 
 export interface RunNotes {
@@ -87,14 +112,12 @@ export interface RunNotes {
  * room to spare on a phone.
  */
 export function runNotes(run: RunDefaults, role: DefaultsRole): RunNotes {
-  const note = (source: DefaultSource) =>
-    source === 'provider' ? undefined : sourceWords(source, role);
-  if (run.model.source === run.effort.source) {
-    const all = note(run.model.source);
-    return all ? { all } : {};
+  const note = (f: RunField) => (f.source === 'provider' ? undefined : fieldWords(f, role));
+  const model = note(run.model);
+  const effort = note(run.effort);
+  if (run.model.source === run.effort.source && model === effort) {
+    return model ? { all: model } : {};
   }
-  const model = note(run.model.source);
-  const effort = note(run.effort.source);
   return { ...(model ? { model } : {}), ...(effort ? { effort } : {}) };
 }
 
@@ -116,7 +139,7 @@ export function runRecorded(run: RunDefaults): { model?: string; effort?: string
  */
 export function fieldText(run: RunField, role: DefaultsRole): string {
   if (run.source === 'session') return run.value ?? 'default';
-  if (run.source === 'role') return `${run.value} (${ROLE_WORDS[role]})`;
+  if (run.source === 'role') return `${run.value} (${fieldWords(run, role)})`;
   return 'default';
 }
 

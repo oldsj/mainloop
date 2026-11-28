@@ -142,8 +142,8 @@ as uncounted root tasks.
 - Provider, model and effort per project: `PUT /projects/{id}/supervisor/settings`
   `{provider_profile_id, model, effort}` (implemented; see the
   [spec](../specs/project-supervisor.md#settings)), validated as `delegate` validates them. Unset, it uses the
-  project's default provider and the owner's `worker` [session default](../specs/chat.md#session-defaults)
-  (which covers supervisors today). A model or effort change
+  project's default provider and the owner's `supervisor` [session default](../specs/chat.md#session-defaults)
+  (else the `worker` one). A model or effort change
   applies to the running session at once (the session's own `/model`/`/effort` override); a
   provider change is a reassign handoff.
 - Its brief says what it is: the project's standing supervisor; it never completes; it receives

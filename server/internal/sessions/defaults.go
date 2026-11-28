@@ -9,10 +9,12 @@ import (
 	"github.com/oldsj/mainloop/server/internal/db/dbstate"
 )
 
-// Session default roles: the main thread, and every other session (task sessions, supervisors).
+// Session default roles: the main thread, supervisors (tasks without a parent), and every other
+// session. A supervisor with no supervisor default for a field takes the worker default.
 const (
-	DefaultRoleMain   = string(dbstate.DefaultRoleMain)
-	DefaultRoleWorker = string(dbstate.DefaultRoleWorker)
+	DefaultRoleMain       = string(dbstate.DefaultRoleMain)
+	DefaultRoleSupervisor = string(dbstate.DefaultRoleSupervisor)
+	DefaultRoleWorker     = string(dbstate.DefaultRoleWorker)
 )
 
 // SessionDefault is the owner's default model and effort for one role and provider profile. A nil
@@ -38,8 +40,8 @@ func (s *Service) SessionDefaults(ctx context.Context) ([]SessionDefault, error)
 // SetSessionDefault records one default, or removes it when both fields are nil. The provider must
 // be a configured profile, and the effort one of the levels it offers.
 func (s *Service) SetSessionDefault(ctx context.Context, d SessionDefault) ([]SessionDefault, error) {
-	if d.Role != DefaultRoleMain && d.Role != DefaultRoleWorker {
-		return nil, fmt.Errorf("%w: role must be main or worker", ErrInvalid)
+	if d.Role != DefaultRoleMain && d.Role != DefaultRoleSupervisor && d.Role != DefaultRoleWorker {
+		return nil, fmt.Errorf("%w: role must be main, supervisor or worker", ErrInvalid)
 	}
 	profile, ok := s.profileFor(d.Provider)
 	if !ok || d.Provider == "" {
@@ -64,7 +66,8 @@ func (s *Service) SetSessionDefault(ctx context.Context, d SessionDefault) ([]Se
 }
 
 // turnModelEffort is the model and effort a turn names: the session's override, else the owner's
-// default for its role and provider. An effort its provider no longer offers (the profile changed
+// default for its role and provider (a supervisor's falls back, field by field, to the worker
+// default; the delivery context query resolves that). An effort its provider no longer offers (the profile changed
 // since it was set, as when the built-in Codex profile dropped minimal) is left out rather than
 // failing every turn: the session's override falls back to the default, and the default to none.
 func (s *Service) turnModelEffort(d dbq.GetDeliveryContextRow) (model, effort *string) {

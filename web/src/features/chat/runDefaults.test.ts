@@ -119,6 +119,44 @@ describe('how the composer says it', () => {
   });
 });
 
+describe('a supervisor’s defaults', () => {
+  const supervisorRow = {
+    role: 'supervisor' as const,
+    provider: 'claude',
+    model: 'claude-opus-5',
+    effort: null
+  };
+  const workerRow = {
+    role: 'worker' as const,
+    provider: 'claude',
+    model: 'claude-sonnet-5',
+    effort: 'high' as const
+  };
+  const rows = [supervisorRow, workerRow];
+
+  it('are its own, then the worker’s for a field it leaves unset', () => {
+    const run = runDefaults({ kind: 'claude' }, rows, 'supervisor');
+    expect(run.model).toEqual({ value: 'claude-opus-5', source: 'role' });
+    expect(run.effort).toEqual({ value: 'high', source: 'role', from: 'worker' });
+    expect(runNotes(run, 'supervisor')).toEqual({
+      model: 'supervisor default',
+      effort: 'worker default'
+    });
+    expect(fieldText(run.effort, 'supervisor')).toBe('high (worker default)');
+  });
+
+  it('are the worker’s when it has none, and a worker never takes the supervisor’s', () => {
+    expect(runDefaults({ kind: 'claude' }, [workerRow], 'supervisor').model).toEqual({
+      value: 'claude-sonnet-5',
+      source: 'role',
+      from: 'worker'
+    });
+    expect(runDefaults({ kind: 'claude' }, [supervisorRow], 'worker').model.source).toBe(
+      'provider'
+    );
+  });
+});
+
 describe('what the chip falls back on while the runner is silent', () => {
   it('gives the recorded values, and nothing for a part that is the provider’s', () => {
     expect(
