@@ -155,6 +155,11 @@ type Kagent struct {
 	SessionReadyTimeout   Seconds          `env:"KAGENT_SESSION_READY_TIMEOUT_SECONDS" envDefault:"120"`
 	SendRetryBudget       Seconds          `env:"KAGENT_SEND_RETRY_BUDGET_SECONDS" envDefault:"30"`
 	ProviderProfiles      ProviderProfiles `env:"PROVIDER_PROFILES"`
+	// LockedAutoAgents are the Agents whose Harness runs Claude's auto permission mode, locked: the
+	// operator's declaration, which the Harness values must match (kagent's
+	// KAGENT_CLAUDE_PERMISSION_MODE=auto and KAGENT_CLAUDE_PERMISSION_MODE_LOCKED=true). Only a
+	// session on one of them may request command.exec. Empty, the default, is none: nobody may.
+	LockedAutoAgents AgentRefs `env:"MAINLOOP_LOCKED_AUTO_AGENTS"`
 
 	// WorkspaceClaudeOverflowAgent and WorkspaceCodexOverflowAgent are the built-in profiles'
 	// agent-overflow Agents: a code child task admitted in the overflow capacity tier

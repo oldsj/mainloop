@@ -539,3 +539,37 @@ func TestRevokeStraysTakesOrphansButNotFreshWork(t *testing.T) {
 		t.Errorf("a credential with a binding is %s", got.State)
 	}
 }
+
+// The actor carries the Agent its binding runs on, and the policy says whether that Agent is
+// declared to run auto permission mode, locked: only a listed Agent is, a name in another
+// namespace is not, and an unknown Agent is not.
+func TestLockedAuto(t *testing.T) {
+	d := testdb.New(t)
+	env := authtest.NewEnv(d.Pool)
+	auth := &agentauth.Authenticator{Q: dbq.New(d.Pool)}
+	p := agentauth.Policy{LockedAutoAgents: []string{"kagent/claude-main-dev", "kagent/claude-supervisor-dev"}}
+	for name, tc := range map[string]struct {
+		ns, agent string
+		want      bool
+	}{
+		"listed":            {"kagent", "claude-main-dev", true},
+		"listed too":        {"kagent", "claude-supervisor-dev", true},
+		"bypass agent":      {"kagent", "claude-workspace-dev", false},
+		"another namespace": {"other", "claude-main-dev", false},
+		"unknown":           {"", "", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace, AgentNamespace: tc.ns, AgentName: tc.agent})
+			got, err := auth.Authenticate(context.Background(), s.Token)
+			if err != nil || got.AgentName != tc.agent || got.AgentNamespace != tc.ns {
+				t.Fatalf("actor = %+v, %v", got, err)
+			}
+			if p.LockedAuto(got) != tc.want {
+				t.Errorf("LockedAuto = %v, want %v", !tc.want, tc.want)
+			}
+		})
+	}
+	if (agentauth.Policy{}).LockedAuto(agentauth.Actor{AgentNamespace: "kagent", AgentName: "claude-main-dev"}) {
+		t.Error("an empty declaration admits an Agent")
+	}
+}

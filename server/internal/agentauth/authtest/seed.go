@@ -48,6 +48,8 @@ type Agent struct {
 	Archived bool
 	// Parent is the parent session id of a task agent.
 	Parent string
+	// AgentNamespace and AgentName pin the binding's kagent Agent.
+	AgentNamespace, AgentName string
 }
 
 // Seeded is a seeded agent with its bearer.
@@ -83,6 +85,12 @@ func (e *Env) Seed(t testing.TB, a Agent) Seeded {
 		SessionID: id, Kind: "claude", Role: a.Role, MCPGrantKind: a.Grant, ParentSessionID: parent,
 	}); err != nil {
 		t.Fatalf("seed binding: %v", err)
+	}
+	if a.AgentName != "" {
+		if _, err := e.Pool.Exec(ctx, `UPDATE agent_bindings SET kagent_agent_namespace = $2, kagent_agent_name = $3 WHERE session_id = $1`,
+			id, a.AgentNamespace, a.AgentName); err != nil {
+			t.Fatalf("seed agent: %v", err)
+		}
 	}
 	out := Seeded{SessionID: id, UserID: a.User}
 	// The credential is issued while the session is live, as in production; a session that ends
