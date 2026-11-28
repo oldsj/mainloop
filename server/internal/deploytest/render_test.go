@@ -66,6 +66,16 @@ var installs = map[string]struct {
 		"executor.toolbox.image=ghcr.io/oldsj/mainloop-toolbox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		"executor.toolbox.imagePullSecrets={ghcr-pull}",
 	}},
+	// The toolbox with cluster reach: Kubernetes access (the proxy's token is for its admin account)
+	// and the executor's image pinned by digest, which the proxy sidecar runs.
+	"production-executor-toolbox-cluster": {"mainloop", "ci/production-values.yaml", []string{
+		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.approvals.mode=web",
+		"executor.kubernetes.enabled=true", "executor.kubernetes.clusterName=internal-01",
+		"executor.image.repository=ghcr.io/oldsj/mainloop-backend",
+		"executor.image.digest=sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+		"executor.toolbox.enabled=true", "executor.toolbox.clusterReach=true",
+		"executor.toolbox.image=ghcr.io/oldsj/mainloop-toolbox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	}},
 	// The same, with http.unifi on.
 	"production-executor-unifi": {"mainloop", "ci/production-values.yaml", []string{
 		"executor.enabled=true", "executor.approvals.mode=web", "executor.namespace=mainloop-executor", "executor.unifi.enabled=true",

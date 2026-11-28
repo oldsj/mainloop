@@ -24,11 +24,17 @@ import (
 // script is a bash script, not a command line.
 const TypeExec = "command.exec"
 
-// The toolbox's single target and the reaches a run can have. internet is the only reach so far.
+// The toolbox's single target and the reaches a run can have. A run reaches the internet or the
+// cluster, never both: a job that needs both is two runs.
 const (
 	ToolboxTarget = "toolbox"
 	ReachInternet = "internet"
+	ReachCluster  = "cluster"
 )
+
+// proxyNotReady is what the run's container writes to its termination message when the kube proxy
+// sidecar never produced a kubeconfig: the script did not start.
+const proxyNotReady = "kube proxy not ready"
 
 // MaxScriptBytes bounds a command.exec script.
 const MaxScriptBytes = 64 << 10
@@ -63,10 +69,9 @@ func normalizeExec(raw json.RawMessage) (any, error) {
 	switch {
 	case a.Target != ToolboxTarget:
 		return nil, invalidf("target is %q, the only target", ToolboxTarget)
-	case a.Reach == "cluster":
-		return nil, invalidf("reach %q is not available yet; reach is %q", a.Reach, ReachInternet)
-	case a.Reach != ReachInternet:
-		return nil, invalidf("reach is %q: the run reaches the internet and nothing inside the network", ReachInternet)
+	case a.Reach != ReachInternet && a.Reach != ReachCluster:
+		return nil, invalidf("reach is %q (the internet, nothing inside the network) or %q (the Kubernetes API as cluster-admin, and no internet)",
+			ReachInternet, ReachCluster)
 	case strings.TrimSpace(a.Script) == "":
 		return nil, invalidf("script is the bash script the toolbox runs")
 	case len(a.Script) > MaxScriptBytes:
@@ -127,9 +132,11 @@ func execExpiry(args any) time.Duration {
 // ExecFacts are command.exec's frozen facts: the image the run will use, by digest, and its reach.
 // There is no preview: nothing runs until the owner approves.
 type ExecFacts struct {
-	Image     string    `json:"image"`
-	Reach     string    `json:"reach"`
-	CheckedAt time.Time `json:"checked_at"`
+	Image string `json:"image"`
+	Reach string `json:"reach"`
+	// ProxyImage is the kube proxy sidecar's image, for cluster reach.
+	ProxyImage string    `json:"proxy_image,omitempty"`
+	CheckedAt  time.Time `json:"checked_at"`
 }
 
 // ToolboxPhase is where a run's pod is.
@@ -149,7 +156,9 @@ const (
 type ToolboxSpec struct {
 	ActionID string
 	Image    string
-	Reach    string
+	// ProxyImage is the sidecar's image, set for cluster reach.
+	ProxyImage string
+	Reach      string
 	Script   string
 	Stdin    string
 	Timeout  time.Duration
@@ -201,13 +210,19 @@ func preflightExec(ctx context.Context, s *Service, raw json.RawMessage, now tim
 	switch {
 	case s.Toolbox == nil || s.ToolboxImage == "":
 		return nil, refuse("this executor has no toolbox")
-	case a.Reach != ReachInternet:
+	case a.Reach == ReachCluster && s.ToolboxProxyImage == "":
+		return nil, refuse("this executor's toolbox has no cluster reach")
+	case a.Reach != ReachInternet && a.Reach != ReachCluster:
 		return nil, refuse("reach %q is not available on this executor", a.Reach)
 	}
 	if err := s.Toolbox.Ready(ctx); err != nil {
 		return nil, err
 	}
-	return ExecFacts{Image: s.ToolboxImage, Reach: a.Reach, CheckedAt: now}, nil
+	f := ExecFacts{Image: s.ToolboxImage, Reach: a.Reach, CheckedAt: now}
+	if a.Reach == ReachCluster {
+		f.ProxyImage = s.ToolboxProxyImage
+	}
+	return f, nil
 }
 
 // imageDigestRE is a reference pinned by digest, as the executor's configuration must give it.
@@ -233,17 +248,27 @@ func renderExec(r dbq.PrivilegedAction, ctx map[string]any) (string, string, map
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Runs this script once, as bash -euo pipefail, in a fresh single-use pod of the toolbox image (%s), "+
-		"for at most %s. The pod holds no credential of Mainloop's:\n", shortDigest(f.Image), a.timeout())
+		"for at most %s. %s:\n", shortDigest(f.Image), a.timeout(), podHolds(f.Reach))
 	b.WriteString(fenced("sh", a.Script))
 	if a.Stdin != "" {
 		b.WriteString("With this on its stdin:\n" + fenced("", a.Stdin))
 	}
-	b.WriteString("\nIt can reach the internet (DNS and public addresses) and nothing inside the network: not the cluster, not the " +
-		"home network. ")
+	if f.Reach == ReachCluster {
+		b.WriteString("\nIt reaches the Kubernetes API as cluster-admin, through a proxy sidecar (" + shortDigest(f.ProxyImage) + ") that alone holds " +
+			"a token minted for this run: the script's kubeconfig names only the proxy. The proxy refuses Secrets, impersonation, token requests, " +
+			"admission policies and webhooks, the proxy subresources, and the executor's and the toolbox's namespaces; exec and port-forward " +
+			"into pods are allowed. It has no internet and no other network: a service is reached with kubectl port-forward. ")
+	} else {
+		b.WriteString("\nIt can reach the internet (DNS and public addresses) and nothing inside the network: not the cluster, not the " +
+			"home network. ")
+	}
 	b.WriteString("Nothing can preview it: nothing has run. ")
 	b.WriteString("There is no retry: if the outcome is lost, it is uncertain and the script is not run again. ")
 	b.WriteString("Its output (exit code, stdout and stderr together, redacted and bounded) goes back to the agent and is stored with the action.")
 	tags := []string{"toolbox", "reach: " + f.Reach}
+	if f.Reach == ReachCluster {
+		tags = append(tags, "cluster-admin")
+	}
 	if w := execMatches(a, execDestructiveWords); len(w) > 0 {
 		tags = append([]string{"destructive: may delete or wipe (" + strings.Join(w, ", ") + ")"}, tags...)
 	}
@@ -282,8 +307,8 @@ func (r *Runner) exec(ctx context.Context, row dbq.PrivilegedAction) outcome {
 		if done, out := r.startedBefore(ctx, row); done {
 			return out
 		}
-		if f.Image != r.ToolboxImage || f.Reach != a.Reach {
-			return outcome{state: StateStale, err: "the toolbox image changed since the owner saw it (" + shortDigest(f.Image) +
+		if f.Image != r.ToolboxImage || f.Reach != a.Reach || f.Reach == ReachCluster && f.ProxyImage != r.ToolboxProxyImage {
+			return outcome{state: StateStale, err: "the toolbox image or its proxy changed since the owner saw it (" + shortDigest(f.Image) +
 				", now " + shortDigest(r.ToolboxImage) + "); nothing ran"}
 		}
 		if err := r.extendLease(ctx, row, a.timeout()+toolboxPendingLimit); err != nil {
@@ -293,7 +318,7 @@ func (r *Runner) exec(ctx context.Context, row dbq.PrivilegedAction) outcome {
 			return retry(err)
 		}
 		err := r.Toolbox.Create(ctx, ToolboxSpec{
-			ActionID: row.ID, Image: f.Image, Reach: a.Reach, Script: a.Script, Stdin: a.Stdin, Timeout: a.timeout(),
+			ActionID: row.ID, Image: f.Image, ProxyImage: f.ProxyImage, Reach: a.Reach, Script: a.Script, Stdin: a.Stdin, Timeout: a.timeout(),
 		})
 		var before *NothingRan
 		switch {
@@ -353,6 +378,9 @@ func (r *Runner) awaitExec(ctx context.Context, row dbq.PrivilegedAction, a Exec
 
 // execOutcome is the run's outcome from its pod's end state.
 func (r *Runner) execOutcome(ctx context.Context, row dbq.PrivilegedAction, a ExecArgs, st ToolboxState) outcome {
+	if a.Reach == ReachCluster && st.Message == proxyNotReady {
+		return outcome{state: StateFailed, err: "the kube proxy beside the script did not start; the script never ran"}
+	}
 	if st.Phase == ToolboxFailed && !st.Started {
 		return outcome{state: StateFailed, err: "the toolbox pod ended before it ran (" + st.Reason + "); nothing ran"}
 	}
@@ -417,4 +445,12 @@ func (r *Runner) reapToolbox(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// podHolds says what the pod holds, for the card.
+func podHolds(reach string) string {
+	if reach == ReachCluster {
+		return "The script's container holds no credential; the proxy beside it holds the run's cluster-admin token"
+	}
+	return "The pod holds no credential of Mainloop's"
 }

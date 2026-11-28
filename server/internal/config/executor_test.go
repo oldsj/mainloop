@@ -188,3 +188,52 @@ func TestParseExecutorApprovalsMode(t *testing.T) {
 		}
 	}
 }
+
+// Cluster reach names the proxy sidecar's image, pinned by digest, and needs Kubernetes.
+func TestParseExecutorToolboxProxy(t *testing.T) {
+	const image = "ghcr.io/oldsj/mainloop-toolbox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	const proxy = "ghcr.io/oldsj/mainloop-backend@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	on := map[string]string{
+		"MAINLOOP_EXECUTOR_OP_TOKEN": "x", "MAINLOOP_EXECUTOR_TOOLBOX_ENABLED": "true", "MAINLOOP_EXECUTOR_TOOLBOX_IMAGE": image,
+		"MAINLOOP_EXECUTOR_NAMESPACE": "mainloop-executor", "MAINLOOP_EXECUTOR_KUBERNETES_ENABLED": "true",
+		"MAINLOOP_EXECUTOR_TOOLBOX_PROXY_IMAGE": proxy,
+	}
+	e, err := config.ParseExecutor(on)
+	if err != nil || e.ToolboxProxyImage != proxy {
+		t.Fatalf("proxy = %q, %v", e.ToolboxProxyImage, err)
+	}
+	for name, set := range map[string]map[string]string{
+		"a tag":         {"MAINLOOP_EXECUTOR_TOOLBOX_PROXY_IMAGE": "ghcr.io/oldsj/mainloop-backend:latest"},
+		"no kubernetes": {"MAINLOOP_EXECUTOR_KUBERNETES_ENABLED": "false"},
+	} {
+		vars := map[string]string{}
+		for k, v := range on {
+			vars[k] = v
+		}
+		for k, v := range set {
+			vars[k] = v
+		}
+		if _, err := config.ParseExecutor(vars); err == nil || !strings.Contains(err.Error(), "MAINLOOP_EXECUTOR_TOOLBOX_PROXY_IMAGE") {
+			t.Errorf("%s: err = %v", name, err)
+		}
+	}
+	delete(on, "MAINLOOP_EXECUTOR_TOOLBOX_PROXY_IMAGE")
+	if e, err := config.ParseExecutor(on); err != nil || e.ToolboxProxyImage != "" {
+		t.Fatalf("off by default: %q, %v", e.ToolboxProxyImage, err)
+	}
+}
+
+// The sidecar's settings: defaults for the mount paths, and the protected namespaces required.
+func TestParseExecKubeProxy(t *testing.T) {
+	p, err := config.ParseExecKubeProxy(map[string]string{"MAINLOOP_EXEC_KUBE_PROTECT": "mainloop-executor, mainloop-toolbox"})
+	if err != nil || p.Creds != "/run/exec-kube" || p.Out != "/run/kube" || !slices.Equal(p.Protect, []string{"mainloop-executor", "mainloop-toolbox"}) {
+		t.Fatalf("proxy = %+v, %v", p, err)
+	}
+	for _, vars := range []map[string]string{
+		{}, {"MAINLOOP_EXEC_KUBE_PROTECT": "Bad_NS"}, {"MAINLOOP_EXEC_KUBE_PROTECT": "x", "MAINLOOP_EXEC_KUBE_OUT": "run/kube"},
+	} {
+		if _, err := config.ParseExecKubeProxy(vars); err == nil {
+			t.Errorf("%v accepted", vars)
+		}
+	}
+}

@@ -218,3 +218,118 @@ func TestKubeToolboxReadyRunsOutputDelete(t *testing.T) {
 		t.Fatalf("ready = %v", err)
 	}
 }
+
+// A cluster-reach pod has the proxy as a native sidecar: only it mounts the run's credential (a
+// second Secret) and the namespaces it must refuse are named; the script's container gets only the
+// shared kubeconfig volume, read-only, and KUBECONFIG; neither has a ServiceAccount token. The
+// admin token is minted with a lifetime past the pod's deadline and the Secret is deleted with the
+// pod.
+func TestKubeToolboxClusterPod(t *testing.T) {
+	k, c := newKubeToolbox()
+	k.Clients.Namespace = "mainloop-executor"
+	var lifetime time.Duration
+	k.AdminCredential = func(_ context.Context, d time.Duration) (privileged.KubeCredential, error) {
+		lifetime = d
+		return privileged.KubeCredential{Token: "tok-fictional-admin-1", Host: "https://10.96.0.1:443", CA: "ca-pem"}, nil
+	}
+	spec := toolboxSpec()
+	spec.Reach, spec.ProxyImage = "cluster", proxyImage
+	if err := k.Create(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	const name = "exec-pa-0b6f1c2e-1111-4222-8333-444455556666"
+	p, err := c.CoreV1().Pods("mainloop-toolbox").Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := p.Spec
+	if len(s.InitContainers) != 1 || s.InitContainers[0].RestartPolicy == nil || *s.InitContainers[0].RestartPolicy != corev1.ContainerRestartPolicyAlways {
+		t.Fatalf("init containers = %+v", s.InitContainers)
+	}
+	side, run := s.InitContainers[0], s.Containers[0]
+	if side.Image != proxyImage || !slices.Equal(side.Command, []string{"/usr/local/bin/mainloop", "exec-kube-proxy"}) || run.Image != toolboxImage {
+		t.Errorf("images: sidecar %s %v, run %s", side.Image, side.Command, run.Image)
+	}
+	env := map[string]string{}
+	for _, e := range side.Env {
+		env[e.Name] = e.Value
+	}
+	if env["MAINLOOP_EXEC_KUBE_PROTECT"] != "mainloop-executor,mainloop-toolbox" || env["MAINLOOP_EXEC_KUBE_CREDS"] != "/run/exec-kube" {
+		t.Errorf("sidecar env = %v", env)
+	}
+	sc := side.SecurityContext
+	if *sc.AllowPrivilegeEscalation || !*sc.ReadOnlyRootFilesystem || !*sc.RunAsNonRoot || *sc.RunAsUser != 65532 || !slices.Equal(sc.Capabilities.Drop, []corev1.Capability{"ALL"}) {
+		t.Errorf("sidecar security = %+v", sc)
+	}
+	if side.StartupProbe == nil || side.StartupProbe.Exec == nil {
+		t.Error("the script starts before the proxy is ready")
+	}
+	mounts := func(c corev1.Container, name string) *corev1.VolumeMount {
+		for i := range c.VolumeMounts {
+			if c.VolumeMounts[i].Name == name {
+				return &c.VolumeMounts[i]
+			}
+		}
+		return nil
+	}
+	if m := mounts(side, "kube-credential"); m == nil || !m.ReadOnly || mounts(run, "kube-credential") != nil {
+		t.Errorf("the credential mount: sidecar %+v, run %+v", m, mounts(run, "kube-credential"))
+	}
+	if m := mounts(run, "kube"); m == nil || !m.ReadOnly || m.MountPath != "/run/kube" {
+		t.Errorf("the script's kubeconfig mount = %+v", m)
+	}
+	if m := mounts(side, "kube"); m == nil || m.ReadOnly {
+		t.Errorf("the proxy cannot write the kubeconfig: %+v", m)
+	}
+	for _, e := range run.Env {
+		if e.Name == "KUBECONFIG" && e.Value != "/run/kube/kubeconfig" {
+			t.Errorf("KUBECONFIG = %s", e.Value)
+		}
+		if strings.Contains(e.Value, "tok-fictional") {
+			t.Errorf("the script's environment holds the token: %s", e.Name)
+		}
+	}
+	if strings.Contains(strings.Join(run.Command, " "), "tok-fictional") || *s.AutomountServiceAccountToken {
+		t.Error("the script's container is handed a credential")
+	}
+	if !strings.Contains(strings.Join(run.Command, " "), "/dev/termination-log") {
+		t.Error("a missing proxy is not reported to the executor")
+	}
+	if lifetime <= time.Duration(*s.ActiveDeadlineSeconds)*time.Second {
+		t.Errorf("token lifetime %s does not outlast the pod's deadline %ds", lifetime, *s.ActiveDeadlineSeconds)
+	}
+	sec, err := c.CoreV1().Secrets("mainloop-toolbox").Get(context.Background(), name+"-kube", metav1.GetOptions{})
+	if err != nil || string(sec.Data["token"]) != "tok-fictional-admin-1" || string(sec.Data["host"]) != "https://10.96.0.1:443" || string(sec.Data["ca.crt"]) != "ca-pem" {
+		t.Fatalf("credential secret = %+v (%v)", sec, err)
+	}
+	// An internet run has no sidecar, no credential and no KUBECONFIG.
+	k2, c2 := newKubeToolbox()
+	if err := k2.Create(context.Background(), toolboxSpec()); err != nil {
+		t.Fatal(err)
+	}
+	p2, _ := c2.CoreV1().Pods("mainloop-toolbox").Get(context.Background(), name, metav1.GetOptions{})
+	if len(p2.Spec.InitContainers) != 0 || strings.Contains(strings.Join(p2.Spec.Containers[0].Command, " "), "KUBECONFIG") {
+		t.Errorf("an internet pod has the proxy: %+v", p2.Spec)
+	}
+	if _, err := c2.CoreV1().Secrets("mainloop-toolbox").Get(context.Background(), name+"-kube", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("an internet run has a credential Secret: %v", err)
+	}
+	// Deleting the run removes both Secrets; a refused pod leaves none.
+	if err := k.Delete(context.Background(), spec.ActionID); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := c.CoreV1().Secrets("mainloop-toolbox").List(context.Background(), metav1.ListOptions{}); len(l.Items) != 0 {
+		t.Errorf("secrets left: %d", len(l.Items))
+	}
+	k3, c3 := newKubeToolbox()
+	k3.AdminCredential = k.AdminCredential
+	c3.PrependReactor("create", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "x", errors.New("no"))
+	})
+	if err := k3.Create(context.Background(), spec); err == nil {
+		t.Fatal("a refused pod was created")
+	}
+	if l, _ := c3.CoreV1().Secrets("mainloop-toolbox").List(context.Background(), metav1.ListOptions{}); len(l.Items) != 0 {
+		t.Errorf("a refused run left %d Secrets", len(l.Items))
+	}
+}

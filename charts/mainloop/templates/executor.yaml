@@ -174,6 +174,16 @@ spec:
               value: {{ .toolbox.image | quote }}
             - name: MAINLOOP_EXECUTOR_TOOLBOX_NAMESPACE
               value: {{ .toolbox.namespace | quote }}
+            {{- if .toolbox.clusterReach }}
+            {{- if not .kubernetes.enabled }}
+            {{- fail "executor.toolbox.clusterReach needs executor.kubernetes.enabled" }}
+            {{- end }}
+            {{- if not $image.digest }}
+            {{- fail "executor.toolbox.clusterReach needs the executor's image pinned by digest (the proxy sidecar runs it)" }}
+            {{- end }}
+            - name: MAINLOOP_EXECUTOR_TOOLBOX_PROXY_IMAGE
+              value: {{ include "mainloop.image" (dict "image" $image "root" $) | quote }}
+            {{- end }}
             - name: MAINLOOP_EXECUTOR_TOOLBOX_PULL_SECRETS
               value: {{ join "," .toolbox.imagePullSecrets | quote }}
             {{- end }}

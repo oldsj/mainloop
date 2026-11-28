@@ -431,8 +431,8 @@ from outside). The pod is the boundary, so the script is a script and not a comm
   600, default 60. A script or stdin that looks like it holds a credential is refused
   (`contains_secret`): the card shows them as they are. An unknown field, including `secrets` and
   `hosts`, is refused.
-- `reach` is `internet`, the only reach built. A run reaches the internet or, later, the cluster,
-  never both; a job that needs both is two runs. `cluster` is refused as "not available yet".
+- `reach` is `internet` or `cluster`. A run reaches the internet or the Kubernetes API, never both;
+  a job that needs both is two runs. `lan:<host>` is not built.
 - **The image** is `executor.toolbox.image`, pinned by digest (a tag is refused at render and at
   start). It is built from `images/toolbox` for amd64 and arm64: kubectl, talosctl, omnictl, helm,
   kustomize, cilium, crane, yq, gh, flyctl, doctl, uv, node, pnpm, wrangler, python3, jq, psql, ssh
@@ -453,10 +453,34 @@ from outside). The pod is the boundary, so the script is a script and not a comm
   default-deny allows nothing; the deployment's network policy for that label opens DNS and public
   addresses and not private, link-local or cluster ones. Without such a policy a run reaches
   nothing. The chart does not grant the network access; it is the deployment's.
+- **Reach, `cluster`.** For a script that needs the cluster (helm, kubectl beyond `command.kubectl`'s
+  allowlist, `psql` through a port-forward). Needs `executor.toolbox.clusterReach` (and
+  `executor.kubernetes`, since the token is for the admin account, and the executor's image pinned
+  by digest) and is `preflight_failed` without it.
+  - The pod gets a native sidecar, `mainloop exec-kube-proxy` (the executor's own image, frozen in
+    the facts and checked again at run time: a change is `stale`). The executor mints a cluster-admin
+    token for the run, valid past the pod's deadline, and puts it in a per-run Secret
+    `exec-<action id>-kube` that only the sidecar mounts. The sidecar serves the API on
+    `127.0.0.1:6443` with a certificate and a token of its own, made at start, and writes a
+    kubeconfig that names only those into a memory volume the script's container reads
+    (`KUBECONFIG`). The script's container never mounts the credential, and neither container has a
+    ServiceAccount token. The script's container starts once the sidecar's kubeconfig exists; if
+    it never does, the container reports `kube proxy not ready` in its termination message and the
+    run is `failed`, "the script never ran".
+  - The proxy adds the real token and refuses what the executor's kubectl proxy refuses: Secrets,
+    impersonation, token requests, admission policies and webhooks, the proxy subresources, and the
+    executor's roles and bindings and namespace, and also the toolbox namespace, where the run's
+    own Secrets are. `exec` and `port-forward` into pods pass (attach and other streams do not), so
+    a Service is reached with `kubectl port-forward`. It is cluster-admin otherwise: the card says
+    so, shows the proxy's digest, and tags the run `cluster-admin`.
+  - The pod's network is the deployment's policy for `mainloop.dev/reach=cluster`: DNS and the
+    Kubernetes API, and no internet. The Secrets go with the pod.
+  - A script cannot send what it read to the internet (it has none), but its output returns to the
+    agent, redacted and bounded.
 - **Credentials.** The pod holds none of the executor's: no 1Password, Omni, ssh or UniFi
-  credential, no Kubernetes token, no database. Only the executor's toolbox account, which may make,
-  read and delete pods, their logs and Secrets in the toolbox namespace, is minted a token, and the
-  executor holds that.
+  credential, no database, and no Kubernetes token of its own (a cluster-reach run's proxy holds the
+  run's token, above). The executor's toolbox account, which may make, read and delete pods, their
+  logs and Secrets in the toolbox namespace, is minted a token, and the executor holds that.
 - **Preflight.** The executor checks that it can list pods in the toolbox namespace and freezes the
   image and the reach. Nothing runs, so there is no preview. The agent sees both.
 - The card shows the script and stdin in full, the image's short digest, the timeout, and tags:
@@ -494,9 +518,8 @@ from outside). The pod is the boundary, so the script is a script and not a comm
   Agent's status, so the Harness values must match the list, and a mismatch is not detected.
   Naming an Agent whose Harness is not locked auto defeats the gate.
 
-Not built, and not promised by this part: `reach: cluster` through a kube proxy sidecar, `secrets`
-and `hosts` (run secrets with per-run egress), `lan:<host>`, and checking the declaration against
-the Agent's reported permission mode.
+Not built, and not promised by this part: `secrets` and `hosts` (run secrets with per-run egress),
+`lan:<host>`, and checking the declaration against the Agent's reported permission mode.
 
 `http.unifi {method, path, body}` sends one request to the UniFi console's Network application,
 with the executor's own API key.
@@ -797,7 +820,7 @@ executor only), `user` and `known-hosts` (the host's key line, pinned; markers a
 are refused). The executor mounts each read-only and reads it for each connection, so a rotated
 key needs no restart. The executor reaches a host only if the network lets its address through.
 
-**Toolbox.** With `executor.toolbox.enabled`, the chart renders the toolbox namespace and the
+**Toolbox.** With `executor.toolbox.enabled` (and `clusterReach`, which only sets the sidecar's image), the chart renders the toolbox namespace and the
 ServiceAccount `mainloop-executor-toolbox` in the executor's namespace. No pod runs as the account.
 The executor's own account may create tokens for it, and each `command.exec` run uses one that
 outlives its deadline. A Role in the toolbox namespace lets it create, get, list and delete pods,

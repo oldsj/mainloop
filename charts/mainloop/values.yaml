@@ -394,6 +394,11 @@ executor:
     # image workflow prints). A tag is refused.
     image: ''
     namespace: mainloop-toolbox
+    # Cluster reach (reach: cluster): a run whose script reaches the Kubernetes API as cluster-admin
+    # and nothing else, through a proxy sidecar (the executor's own image, `mainloop
+    # exec-kube-proxy`) that alone holds a token minted for the run. Needs executor.kubernetes (the
+    # token is for its admin account) and a pull secret for the executor's image if it is private.
+    clusterReach: false
     # Secrets in the toolbox namespace that the image's registry needs, if it is private.
     imagePullSecrets: []
   nodeSelector: {}

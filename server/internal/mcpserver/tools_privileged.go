@@ -97,13 +97,15 @@ func (s *Server) privilegedTools() []Tool {
 			"is tagged destructive and expires in an hour; an upgrade is tagged as installing software. The answer (status and " +
 			"body, secret fields redacted) comes back as the result. It answers unavailable where the executor has no UniFi access. " +
 			"command.exec {target (toolbox, the only one), script (a bash script, run as bash -euo pipefail; at most 64 KiB), stdin (64 KiB), " +
-			"reach (internet, the only one so far), timeout_seconds (default 60, at most 600)} runs that script once in a fresh, " +
+			"reach (internet, or cluster: one, never both), timeout_seconds (default 60, at most 600)} runs that script once in a fresh, " +
 			"single-use pod of the toolbox image, for what no typed action covers: a CLI that is not kubectl (helm, crane, gh, " +
 			"curl, dig, ping, jq, yq, psql, python3, node, uv and others at pinned versions), a script that chains tools, a download " +
 			"or a check from outside. The pod holds no credential: no Kubernetes token, no Mainloop secret, and no secret of yours " +
 			"unless the script carries one (a credential in script or stdin is refused, contains_secret). With internet reach it " +
 			"can reach DNS and public addresses and nothing inside the network: the cluster, the home network and Mainloop are " +
-			"unreachable. It has a read-only root, 1 CPU, 2 GiB and a 1 GiB /work. The card shows the script and stdin in full, " +
+			"unreachable. With reach cluster the script reaches the Kubernetes API as cluster-admin through a proxy sidecar (kubectl, helm and " +
+			"KUBECONFIG are set; Secrets, impersonation, admission policies and the executor's and toolbox namespaces are refused; exec and " +
+			"port-forward into pods work) and has no internet; a service is reached with kubectl port-forward. It has a read-only root, 1 CPU, 2 GiB and a 1 GiB /work. The card shows the script and stdin in full, " +
 			"the image's digest and the reach, with a tag when a word scan sees a delete (the card then expires in an hour) or an " +
 			"install; nothing can preview it. You get the exit code and the output (stdout and stderr together, redacted, 64 KiB). " +
 			"A script that ran past its timeout or whose outcome was lost is uncertain, never run again. It answers unavailable " +
