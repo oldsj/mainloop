@@ -232,6 +232,12 @@ type Service struct {
 	ToolboxOn bool
 	// Toolbox makes and reads the toolbox pods; nil without a toolbox.
 	Toolbox Toolbox
+	// ToolboxSecrets lets a run take 1Password fields as files and name the hosts it may reach
+	// (needs the toolbox account's rights on CiliumNetworkPolicies and the Cilium DNS proxy).
+	ToolboxSecrets bool
+	// ToolboxGuardedItems are the item-title globs a run may not take; DefaultGuardedItems when
+	// empty.
+	ToolboxGuardedItems []string
 	// ToolboxProxyImage is the image of the kube proxy sidecar (the executor's own, by digest):
 	// set, a run may have cluster reach.
 	ToolboxProxyImage string

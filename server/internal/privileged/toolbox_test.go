@@ -26,6 +26,7 @@ type fakeToolbox struct {
 }
 
 type fakePod struct {
+	secrets map[string][]byte
 	spec    privileged.ToolboxSpec
 	states  []privileged.ToolboxState
 	output  string
@@ -37,7 +38,11 @@ func newFakeToolbox() *fakeToolbox { return &fakeToolbox{pods: map[string]*fakeP
 // finishes makes every new pod end with st and print output.
 func (f *fakeToolbox) finishes(st privileged.ToolboxState, output string) {
 	f.createFn = func(spec privileged.ToolboxSpec) error {
-		f.pods[spec.ActionID] = &fakePod{spec: spec, states: []privileged.ToolboxState{st}, output: output, created: time.Now()}
+		secrets := map[string][]byte{}
+		for n, v := range spec.Secrets {
+			secrets[n] = append([]byte(nil), v...)
+		}
+		f.pods[spec.ActionID] = &fakePod{spec: spec, states: []privileged.ToolboxState{st}, output: output, created: time.Now(), secrets: secrets}
 		return nil
 	}
 }
@@ -50,7 +55,13 @@ func (f *fakeToolbox) Create(_ context.Context, spec privileged.ToolboxSpec) err
 	if _, ok := f.pods[spec.ActionID]; ok {
 		return nil // the same run
 	}
-	f.created = append(f.created, spec)
+	// The runner clears its copy of the values once the call returns, as a real client has sent them.
+	kept := spec
+	kept.Secrets = map[string][]byte{}
+	for n, v := range spec.Secrets {
+		kept.Secrets[n] = append([]byte(nil), v...)
+	}
+	f.created = append(f.created, kept)
 	return f.createFn(spec)
 }
 
@@ -67,6 +78,16 @@ func (f *fakeToolbox) State(_ context.Context, id string) (privileged.ToolboxSta
 	}
 	st.Exists = true
 	return st, nil
+}
+
+func (f *fakeToolbox) RunSecrets(_ context.Context, id string) (map[string][]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, ok := f.pods[id]
+	if !ok {
+		return nil, errors.New("no pod")
+	}
+	return p.secrets, nil
 }
 
 func (f *fakeToolbox) Output(_ context.Context, id string, max int) ([]byte, error) {
@@ -403,8 +424,7 @@ func TestExecArguments(t *testing.T) {
 		"timeout":             {bad(map[string]any{"timeout_seconds": 601}), "timeout_seconds is 1 to 600"},
 		"credential":          {bad(map[string]any{"script": "curl -H 'Authorization: Bearer ghp_" + strings.Repeat("a", 36) + "' https://api.github.com"}), "contains_secret"},
 		"credential in stdin": {bad(map[string]any{"stdin": "ghp_" + strings.Repeat("b", 36)}), "contains_secret"},
-		"unknown field":       {bad(map[string]any{"secrets": []any{}}), "secrets"},
-		"hosts for later":     {bad(map[string]any{"hosts": []any{"example.org"}}), "hosts"},
+		"unknown field":       {bad(map[string]any{"env": "X=1"}), "env"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := e.svc.Request(context.Background(), mainSession, privileged.TypeExec, jsonArgs(tc.args), "r", "req-"+strings.ReplaceAll(name, " ", "-"))

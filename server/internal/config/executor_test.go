@@ -223,6 +223,28 @@ func TestParseExecutorToolboxProxy(t *testing.T) {
 	}
 }
 
+// The guard list is item-title globs; empty means the default list.
+func TestParseExecutorToolboxSecrets(t *testing.T) {
+	const image = "ghcr.io/oldsj/mainloop-toolbox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	on := map[string]string{
+		"MAINLOOP_EXECUTOR_OP_TOKEN": "x", "MAINLOOP_EXECUTOR_TOOLBOX_ENABLED": "true", "MAINLOOP_EXECUTOR_TOOLBOX_IMAGE": image,
+		"MAINLOOP_EXECUTOR_NAMESPACE": "mainloop-executor", "MAINLOOP_EXECUTOR_TOOLBOX_SECRETS_ENABLED": "true",
+		"MAINLOOP_EXECUTOR_TOOLBOX_GUARDED_ITEMS": " mainloop-executor-*, op-gate* ,",
+	}
+	e, err := config.ParseExecutor(on)
+	if err != nil || !bool(e.ToolboxSecrets) || !slices.Equal(e.ToolboxGuardedItems, []string{"mainloop-executor-*", "op-gate*"}) {
+		t.Fatalf("secrets = %v, guarded = %v, %v", e.ToolboxSecrets, e.ToolboxGuardedItems, err)
+	}
+	on["MAINLOOP_EXECUTOR_TOOLBOX_GUARDED_ITEMS"] = "ok-*,bad item"
+	if _, err := config.ParseExecutor(on); err == nil || !strings.Contains(err.Error(), "MAINLOOP_EXECUTOR_TOOLBOX_GUARDED_ITEMS") {
+		t.Errorf("a bad glob: %v", err)
+	}
+	delete(on, "MAINLOOP_EXECUTOR_TOOLBOX_GUARDED_ITEMS")
+	if e, err := config.ParseExecutor(on); err != nil || len(e.ToolboxGuardedItems) != 0 {
+		t.Errorf("default = %v, %v", e.ToolboxGuardedItems, err)
+	}
+}
+
 // The sidecar's settings: defaults for the mount paths, and the protected namespaces required.
 func TestParseExecKubeProxy(t *testing.T) {
 	p, err := config.ParseExecKubeProxy(map[string]string{"MAINLOOP_EXEC_KUBE_PROTECT": "mainloop-executor, mainloop-toolbox"})

@@ -69,9 +69,18 @@ type Executor struct {
 	// ToolboxProxyImage turns on cluster reach for command.exec: the image (by digest, the
 	// executor's own) of the kube proxy sidecar. It needs Kubernetes, whose admin account the
 	// proxy's token is minted for.
-	ToolboxProxyImage    string   `env:"MAINLOOP_EXECUTOR_TOOLBOX_PROXY_IMAGE"`
-	ToolboxPullSecretSet []string `env:"-"`
+	ToolboxProxyImage string `env:"MAINLOOP_EXECUTOR_TOOLBOX_PROXY_IMAGE"`
+	// ToolboxSecrets lets a run take 1Password fields as files and name the hosts it may reach.
+	// ToolboxGuardedItemList are the item-title globs (comma-separated) no run may take; the default
+	// list (executor, 1Password operator and op-gate items) when empty.
+	ToolboxSecrets         ExactTrue `env:"MAINLOOP_EXECUTOR_TOOLBOX_SECRETS_ENABLED"`
+	ToolboxGuardedItemList string    `env:"MAINLOOP_EXECUTOR_TOOLBOX_GUARDED_ITEMS"`
+	ToolboxGuardedItems    []string  `env:"-"`
+	ToolboxPullSecretSet   []string  `env:"-"`
 }
+
+// guardedItemRE is a glob over an item's title.
+var guardedItemRE = regexp.MustCompile(`^[A-Za-z0-9_.*-]{1,100}$`)
 
 // toolboxImageRE is an image reference pinned by digest.
 var toolboxImageRE = regexp.MustCompile(`^[a-z0-9][a-z0-9./_:-]*@sha256:[a-f0-9]{64}$`)
@@ -169,6 +178,16 @@ func ParseExecutor(vars map[string]string) (*Executor, error) {
 			if len(e.ToolboxProxyImage) > 300 || !toolboxImageRE.MatchString(e.ToolboxProxyImage) {
 				errs = append(errs, errors.New("MAINLOOP_EXECUTOR_TOOLBOX_PROXY_IMAGE must be an image reference pinned by digest (name@sha256:...)"))
 			}
+		}
+		for _, g := range strings.Split(e.ToolboxGuardedItemList, ",") {
+			if g = strings.TrimSpace(g); g == "" {
+				continue
+			}
+			if !guardedItemRE.MatchString(g) {
+				errs = append(errs, fmt.Errorf("MAINLOOP_EXECUTOR_TOOLBOX_GUARDED_ITEMS: %q is not an item-title glob (letters, digits, '-', '_', '.', '*')", g))
+				continue
+			}
+			e.ToolboxGuardedItems = append(e.ToolboxGuardedItems, g)
 		}
 		for _, s := range strings.Split(e.ToolboxPullSecrets, ",") {
 			if s = strings.TrimSpace(s); s == "" {

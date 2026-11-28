@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
@@ -331,5 +332,94 @@ func TestKubeToolboxClusterPod(t *testing.T) {
 	}
 	if l, _ := c3.CoreV1().Secrets("mainloop-toolbox").List(context.Background(), metav1.ListOptions{}); len(l.Items) != 0 {
 		t.Errorf("a refused run left %d Secrets", len(l.Items))
+	}
+}
+
+var policyGVRTest = schema.GroupVersionResource{Group: "cilium.io", Version: "v2", Resource: "ciliumnetworkpolicies"}
+
+// A run with secrets has the pinned reach label, which no deployment policy opens; its own
+// CiliumNetworkPolicy allows DNS for its hosts and TCP 443 to them and nothing else, and selects
+// its pod alone; its values are a Secret mounted read-only at /run/secrets and never an
+// environment variable; deleting the run removes the policy and the Secret.
+func TestKubeToolboxSecretsPod(t *testing.T) {
+	k, c := newKubeToolbox()
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{policyGVRTest: "CiliumNetworkPolicyList"})
+	k.Dynamic, k.Policies = dyn, true
+	spec := toolboxSpec()
+	spec.Secrets = map[string][]byte{"cf": []byte("tok-fictional-cf-1")}
+	spec.Hosts = []string{"api.cloudflare.com", "example.org"}
+	if err := k.Create(context.Background(), spec); err != nil {
+		t.Fatal(err)
+	}
+	const name = "exec-pa-0b6f1c2e-1111-4222-8333-444455556666"
+	p, err := c.CoreV1().Pods("mainloop-toolbox").Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Labels["mainloop.dev/reach"] != "internet-pinned" {
+		t.Errorf("reach label = %q: a deployment's internet policy would open it to every address", p.Labels["mainloop.dev/reach"])
+	}
+	run := p.Spec.Containers[0]
+	var mount *corev1.VolumeMount
+	for i := range run.VolumeMounts {
+		if run.VolumeMounts[i].MountPath == "/run/secrets" {
+			mount = &run.VolumeMounts[i]
+		}
+	}
+	if mount == nil || !mount.ReadOnly {
+		t.Errorf("secrets mount = %+v", mount)
+	}
+	for _, e := range run.Env {
+		if strings.Contains(e.Value, "tok-fictional") {
+			t.Errorf("a value is in the environment: %s", e.Name)
+		}
+	}
+	sec, err := c.CoreV1().Secrets("mainloop-toolbox").Get(context.Background(), name+"-secrets", metav1.GetOptions{})
+	if err != nil || string(sec.Data["cf"]) != "tok-fictional-cf-1" {
+		t.Fatalf("secrets secret = %+v (%v)", sec, err)
+	}
+	got, err := k.RunSecrets(context.Background(), spec.ActionID)
+	if err != nil || string(got["cf"]) != "tok-fictional-cf-1" {
+		t.Fatalf("RunSecrets = %v (%v)", got, err)
+	}
+	pol, err := dyn.Resource(policyGVRTest).Namespace("mainloop-toolbox").Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spc := pol.Object["spec"].(map[string]any)
+	sel := spc["endpointSelector"].(map[string]any)["matchLabels"].(map[string]any)
+	if len(sel) != 1 || sel["mainloop.dev/privileged-action"] != spec.ActionID {
+		t.Errorf("the policy selects %v", sel)
+	}
+	egress := spc["egress"].([]any)
+	if len(egress) != 2 {
+		t.Fatalf("egress = %v", egress)
+	}
+	dns := egress[0].(map[string]any)["toPorts"].([]any)[0].(map[string]any)["rules"].(map[string]any)["dns"].([]any)
+	fq := egress[1].(map[string]any)["toFQDNs"].([]any)
+	ports := egress[1].(map[string]any)["toPorts"].([]any)[0].(map[string]any)["ports"].([]any)
+	if len(dns) != 2 || len(fq) != 2 || fq[0].(map[string]any)["matchName"] != "api.cloudflare.com" || len(ports) != 1 || ports[0].(map[string]any)["port"] != "443" {
+		t.Errorf("policy = %v", spc)
+	}
+	if _, ok := egress[1].(map[string]any)["toCIDR"]; ok {
+		t.Error("the policy has a CIDR rule")
+	}
+	if err := k.Delete(context.Background(), spec.ActionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dyn.Resource(policyGVRTest).Namespace("mainloop-toolbox").Get(context.Background(), name, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("the policy is left: %v", err)
+	}
+	if l, _ := c.CoreV1().Secrets("mainloop-toolbox").List(context.Background(), metav1.ListOptions{}); len(l.Items) != 0 {
+		t.Errorf("secrets left: %d", len(l.Items))
+	}
+	// A run without secrets has none of this.
+	k2, c2 := newKubeToolbox()
+	if err := k2.Create(context.Background(), toolboxSpec()); err != nil {
+		t.Fatal(err)
+	}
+	p2, _ := c2.CoreV1().Pods("mainloop-toolbox").Get(context.Background(), name, metav1.GetOptions{})
+	if p2.Labels["mainloop.dev/reach"] != "internet" {
+		t.Errorf("reach label = %q", p2.Labels["mainloop.dev/reach"])
 	}
 }

@@ -88,9 +88,10 @@ func serveExecutor(ctx context.Context, log *slog.Logger) error {
 	}
 	if cfg.Toolbox {
 		clients := privileged.KubeClients{Client: kube, Base: kc, Namespace: cfg.Namespace}
-		svc.Toolbox = &privileged.KubeToolbox{Clients: clients, Namespace: cfg.ToolboxNamespace, PullSecrets: cfg.ToolboxPullSecretSet}
+		svc.Toolbox = &privileged.KubeToolbox{Clients: clients, Namespace: cfg.ToolboxNamespace, PullSecrets: cfg.ToolboxPullSecretSet, Policies: bool(cfg.ToolboxSecrets)}
 		svc.ToolboxImage = cfg.ToolboxImage
 		svc.ToolboxProxyImage = cfg.ToolboxProxyImage
+		svc.ToolboxSecrets, svc.ToolboxGuardedItems = bool(cfg.ToolboxSecrets), cfg.ToolboxGuardedItems
 	}
 	r := &privileged.Runner{Service: svc}
 	log.Info("executor ready", "types", privileged.TypesFor(true), "secret_namespaces", cfg.SecretNamespaces,

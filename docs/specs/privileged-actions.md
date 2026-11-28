@@ -477,6 +477,40 @@ from outside). The pod is the boundary, so the script is a script and not a comm
     Kubernetes API, and no internet. The Secrets go with the pod.
   - A script cannot send what it read to the internet (it has none), but its output returns to the
     agent, redacted and bounded.
+- **Secrets and hosts.** `secrets: [{ref, name}]` with `hosts: [...]` gives a run 1Password fields
+  for one call (a token for wrangler, flyctl, doctl, gh or an API), without the value ever reaching
+  a transcript. Needs `executor.toolbox.secrets.enabled` (Cilium's DNS proxy and its
+  CiliumNetworkPolicy CRD), and is `preflight_failed` without it.
+  - `ref` is `op://kubernetes/<item>/<field>`, an id or an exact title for each part, in vault
+    `kubernetes` only; `name` is 1 to 31 lower-case letters, digits, `-` or `_` and is the file
+    `/run/secrets/<name>` (read-only, mode 0444, never an environment variable). Up to 8 secrets.
+    Secrets need internet reach and a non-empty `hosts`; hosts are up to 8 public, fully qualified,
+    lower-case names (no wildcard, port or address, and none ending `.local`, `.internal`, `.lan`,
+    `.home`, `.svc`, `.cluster` or `.olds.network`). Hosts without secrets are refused.
+  - **Guard list.** A run never takes an item the executor or the secret plumbing depends on:
+    by default item titles matching `mainloop-executor-*`, `op-gate*`, `op-connect*`,
+    `op-credentials*`, `onepassword*` or `1password*`, or the list in
+    `executor.toolbox.secrets.guardedItems`. It is a name rule: an item named otherwise is not
+    covered, so the list is reviewed with the chart's values. Refused at preflight and again at run
+    time.
+  - **Preflight** reads each field's metadata (item, version, last edit, field), never a value, and
+    freezes it with the hosts. The card shows each `/run/secrets/<name>`, the item, its version and
+    last edit and the hosts, and tags `uses <item>/<field>; can send it to <hosts>`; the agent sees
+    the same, no value.
+  - **Run.** The executor reads each value at run time and the item's version must be the one the
+    owner saw, or the run is `stale` and nothing is made (the values are cleared from memory
+    either way). Then it makes the run's policy, its Secret `exec-<id>-secrets` and the pod.
+    The pod's reach label is `internet-pinned`, which the deployment's `internet` policy does not
+    select, and the run's own CiliumNetworkPolicy, made by the toolbox account and deleted with the
+    run, allows DNS for exactly the hosts and TCP 443 to them. Nothing else, so not other public
+    hosts, and the default deny keeps the cluster and the LAN out. A host that resolves to a private
+    address is the one exception a name rule cannot cover (Cilium follows DNS); the name checks
+    above keep the obvious ones out.
+  - **Redaction.** The output has every value the run held removed exactly (plain and base64, and
+    each longer line of a multi-line value), read back from the run's own Secret, so a value rotated
+    since is still removed. If it cannot be read, the output is not stored and the attempt retries.
+  - Cilium's DNS proxy was verified on internal-01 (read only): `enable-l7-proxy` is on and
+    other policies already use `toFQDNs`.
 - **Credentials.** The pod holds none of the executor's: no 1Password, Omni, ssh or UniFi
   credential, no database, and no Kubernetes token of its own (a cluster-reach run's proxy holds the
   run's token, above). The executor's toolbox account, which may make, read and delete pods, their
@@ -518,8 +552,8 @@ from outside). The pod is the boundary, so the script is a script and not a comm
   Agent's status, so the Harness values must match the list, and a mismatch is not detected.
   Naming an Agent whose Harness is not locked auto defeats the gate.
 
-Not built, and not promised by this part: `secrets` and `hosts` (run secrets with per-run egress),
-`lan:<host>`, and checking the declaration against the Agent's reported permission mode.
+Not built, and not promised by this part: `lan:<host>`, `save` (writing a file a run made into
+1Password) and checking the declaration against the Agent's reported permission mode.
 
 `http.unifi {method, path, body}` sends one request to the UniFi console's Network application,
 with the executor's own API key.
