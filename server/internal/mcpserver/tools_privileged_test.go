@@ -102,37 +102,44 @@ func TestPrivilegedActionsOff(t *testing.T) {
 
 // command.exec is granted only to a session whose Agent is declared to run auto permission mode,
 // locked (MAINLOOP_LOCKED_AUTO_AGENTS): main on a listed Agent may request it, main on any other
-// Agent, or on none, is refused with unsupported_action and nothing is recorded.
+// Agent, or on none, is refused with unsupported_action and nothing is recorded. (One main exists
+// per database, so each case has its own.)
 func TestRequestExecNeedsALockedAutoAgent(t *testing.T) {
-	h := buildHarness(t, false, true, func(s *mcpserver.Server, _ *pgxpool.Pool) {
-		s.Policy.LockedAutoAgents = []string{"kagent/claude-main-dev"}
-		s.Privileged.ExecutorOn, s.Privileged.ToolboxOn = true, true
-	})
 	args := func(id string) map[string]any {
 		return map[string]any{
 			"request_id": id, "type": privileged.TypeExec, "reason": "Check DNS from outside.",
 			"args": map[string]any{"target": "toolbox", "reach": "internet", "script": "dig +short example.org"},
 		}
 	}
-	locked := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleMain, Grant: dbstate.GrantCoordination, AgentNamespace: "kagent", AgentName: "claude-main-dev"})
-	_, r := h.call(mcpserver.PathOrdinary, locked.Token, "request_privileged_action", args("e1"))
-	if r.Result.IsError || r.Result.StructuredContent["state"] != privileged.StateRequested {
-		t.Fatalf("a locked auto session's request = %v %q", r.Result.StructuredContent, r.text())
-	}
-	for name, a := range map[string]authtest.Agent{
-		"bypass agent":    {Role: dbstate.RoleMain, Grant: dbstate.GrantCoordination, AgentNamespace: "kagent", AgentName: "claude-workspace-dev"},
-		"other namespace": {Role: dbstate.RoleMain, Grant: dbstate.GrantCoordination, AgentNamespace: "other", AgentName: "claude-main-dev"},
-		"no agent":        {Role: dbstate.RoleMain, Grant: dbstate.GrantCoordination},
+	for name, tc := range map[string]struct {
+		ns, agent string
+		allowed   bool
+	}{
+		"locked auto agent": {"kagent", "claude-main-dev", true},
+		"bypass agent":      {"kagent", "claude-workspace-dev", false},
+		"other namespace":   {"other", "claude-main-dev", false},
+		"no agent":          {"", "", false},
 	} {
-		a.User = "owner-" + name
-		s := h.env.Seed(t, a)
-		_, r := h.call(mcpserver.PathOrdinary, s.Token, "request_privileged_action", args("e-"+strings.ReplaceAll(name, " ", "-")))
-		if !r.Result.IsError || !strings.Contains(r.text(), "[unsupported_action]") || !strings.Contains(r.text(), "auto permission mode, locked") {
-			t.Errorf("%s: %q", name, r.text())
-		}
-	}
-	var n int
-	if err := h.env.Pool.QueryRow(context.Background(), `SELECT count(*) FROM privileged_actions`).Scan(&n); err != nil || n != 1 {
-		t.Fatalf("rows = %d, %v", n, err)
+		t.Run(name, func(t *testing.T) {
+			h := buildHarness(t, false, true, func(s *mcpserver.Server, _ *pgxpool.Pool) {
+				s.Policy.LockedAutoAgents = []string{"kagent/claude-main-dev"}
+				s.Privileged.ExecutorOn, s.Privileged.ToolboxOn = true, true
+			})
+			main := h.env.Seed(t, authtest.Agent{Role: dbstate.RoleMain, Grant: dbstate.GrantCoordination, AgentNamespace: tc.ns, AgentName: tc.agent})
+			_, r := h.call(mcpserver.PathOrdinary, main.Token, "request_privileged_action", args("e1"))
+			var n int
+			if err := h.env.Pool.QueryRow(context.Background(), `SELECT count(*) FROM privileged_actions`).Scan(&n); err != nil {
+				t.Fatal(err)
+			}
+			if tc.allowed {
+				if r.Result.IsError || r.Result.StructuredContent["state"] != privileged.StateRequested || n != 1 {
+					t.Fatalf("request = %v %q, rows %d", r.Result.StructuredContent, r.text(), n)
+				}
+				return
+			}
+			if !r.Result.IsError || !strings.Contains(r.text(), "[unsupported_action]") || !strings.Contains(r.text(), "auto permission mode, locked") || n != 0 {
+				t.Fatalf("request = %q, rows %d", r.text(), n)
+			}
+		})
 	}
 }

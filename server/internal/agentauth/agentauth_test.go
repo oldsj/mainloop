@@ -559,7 +559,7 @@ func TestLockedAuto(t *testing.T) {
 		"unknown":           {"", "", false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			s := env.Seed(t, authtest.Agent{Role: dbstate.RoleMain, Grant: dbstate.GrantCoordination, User: "owner-" + name, AgentNamespace: tc.ns, AgentName: tc.agent})
+			s := env.Seed(t, authtest.Agent{Role: dbstate.RoleAgent, Grant: dbstate.GrantWorkspace, AgentNamespace: tc.ns, AgentName: tc.agent})
 			got, err := auth.Authenticate(context.Background(), s.Token)
 			if err != nil || got.AgentName != tc.agent || got.AgentNamespace != tc.ns {
 				t.Fatalf("actor = %+v, %v", got, err)
