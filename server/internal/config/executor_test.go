@@ -169,6 +169,8 @@ func TestParseExecutorToolbox(t *testing.T) {
 	}
 	if e, err := config.ParseExecutor(map[string]string{"MAINLOOP_EXECUTOR_OP_TOKEN": "x"}); err != nil || e.Toolbox {
 		t.Fatalf("off by default: %+v (%v)", e, err)
+	}
+}
 
 // The approval mode is exactly web or signed, or unset (which the processes refuse to start with
 // beside an executor): a mistyped value stops serve-executor instead of choosing one.
