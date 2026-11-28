@@ -67,6 +67,12 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string) (Actor, 
 	if row.ProjectID != nil {
 		actor.ProjectID = *row.ProjectID
 	}
+	if row.AgentNamespace != nil {
+		actor.AgentNamespace = *row.AgentNamespace
+	}
+	if row.AgentName != nil {
+		actor.AgentName = *row.AgentName
+	}
 	if a.Depth != nil {
 		depth, mergeOnly, err := a.Depth(ctx, row)
 		if err != nil {

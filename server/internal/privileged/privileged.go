@@ -149,6 +149,10 @@ type Requester struct {
 	Role      string
 	SessionID string
 	TaskID    *string
+	// LockedAuto is set when the session runs on an Agent declared to run Claude's auto permission
+	// mode, locked (MAINLOOP_LOCKED_AUTO_AGENTS). The types that need it (command.exec) are refused
+	// to any other session.
+	LockedAuto bool
 }
 
 // Action is a stored action as the tools report it.
@@ -259,6 +263,9 @@ func (s *Service) Request(ctx context.Context, by Requester, typ string, rawArgs
 		return Action{}, fmt.Errorf("%w: %q is not in the catalog (%s)", ErrUnsupported, typ, strings.Join(Types(), ", "))
 	}
 	switch {
+	case entry.lockedAuto && !by.LockedAuto:
+		return Action{}, fmt.Errorf("%w: %s is granted only to a session whose Agent runs Claude's auto permission mode, locked, "+
+			"and this session's Agent is not declared to", ErrUnsupported, typ)
 	case entry.executor && !s.ExecutorOn:
 		return Action{}, fmt.Errorf("%w: %s needs Mainloop's executor, which this Mainloop does not run", ErrUnsupported, typ)
 	case entry.kube && !s.KubernetesOn:

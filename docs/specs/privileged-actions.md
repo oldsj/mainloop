@@ -502,13 +502,24 @@ from outside). The pod is the boundary, so the script is a script and not a comm
 - A pod outlives its run until the action is final, so that a lost answer can be read again; the
   executor then deletes the pod and its Secret. It also deletes any run of an action it does not
   know once an hour old.
-- It runs one at a time, for the same requesters and under the same rate limits as the other
-  executor types. It answers `unavailable` where the executor has no toolbox.
+- It runs one at a time, for the same requesters (main and coordinating supervisors, and only on a
+  locked auto Agent, above) and under the same rate limits as the other executor types. It answers `unavailable` where the executor has no toolbox.
+
+- **Who may request it.** Only a session whose Agent is declared to run Claude's auto permission
+  mode, locked, so that no live-view client or client-port message can switch the session to bypass
+  (kagent's `KAGENT_CLAUDE_PERMISSION_MODE=auto` with `KAGENT_CLAUDE_PERMISSION_MODE_LOCKED=true`
+  on the Agent's Harness). The declaration is `MAINLOOP_LOCKED_AUTO_AGENTS`, a comma-separated list
+  of Agents (`name`, in the kagent namespace, or `namespace/name`); it is empty by default, so by
+  default nobody may. The check is on the Agent the session's binding runs on. A session on another
+  Agent, one whose Agent is not recorded, and any Codex session (until Codex's sandbox is proven in
+  our workers) is refused with `unsupported_action` before anything is recorded or counted. It is
+  enforced in the service, not the prompt. It is the operator's declaration and not yet a
+  check against what the Harness reports: kagent does not publish its permission mode on the
+  Agent's status, so the Harness values must match the list, and a mismatch is not detected.
+  Naming an Agent whose Harness is not locked auto defeats the gate.
 
 Not built, and not promised by this part: `secrets` and `hosts` (run secrets with per-run egress),
-`lan:<host>`, and granting `command.exec` only to a
-session in locked auto mode. Until the last is built, `command.exec` is requestable
-by every session that may request privileged actions, so it stays on dev.
+`lan:<host>`, and checking the declaration against the Agent's reported permission mode.
 
 `http.unifi {method, path, body}` sends one request to the UniFi console's Network application,
 with the executor's own API key.

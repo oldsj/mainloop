@@ -14,6 +14,10 @@ SELECT
     s.status AS session_status,
     s.archived_at AS session_archived_at,
     s.project_id AS project_id,
+    -- The Agent the binding runs on, or the one its create named: the permission-mode gate of
+    -- command.exec reads it.
+    COALESCE(b.kagent_agent_namespace, b.kagent_create_agent_namespace) AS agent_namespace,
+    COALESCE(b.kagent_agent_name, b.kagent_create_agent_name) AS agent_name,
     -- The open-web web_fetch tool: the session's own flag, or its task's (docs/specs/web-fetch.md).
     (b.web_fetch OR EXISTS (
         SELECT 1 FROM task_attempts AS a JOIN tasks AS t ON t.id = a.task_id
