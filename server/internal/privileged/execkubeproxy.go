@@ -85,7 +85,8 @@ func (e ExecKubeProxy) Run(ctx context.Context) error {
 		_ = srv.Close()
 		return fmt.Errorf("exec-kube-proxy: kubeconfig: %w", err)
 	}
-	if err := os.Chmod(tmp, 0o444); err != nil {
+	// The script's container reads it: it names only the proxy and this run's token.
+	if err := os.Chmod(tmp, 0o444); err != nil { //nolint:gosec // see above
 		_ = srv.Close()
 		return err
 	}

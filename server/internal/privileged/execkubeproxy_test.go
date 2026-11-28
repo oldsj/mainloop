@@ -102,8 +102,13 @@ func TestExecKubeProxyRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp, err := rt.RoundTrip(req); err != nil || resp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("wrong token: %v, %v", resp, err)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("wrong token: %v", resp.StatusCode)
 	}
 	for _, r := range api.all() {
 		if strings.Contains(r.path, "secrets") || strings.Contains(r.path, "mainloop-toolbox") || strings.Contains(r.path, proxyOwnNS) {
@@ -111,7 +116,7 @@ func TestExecKubeProxyRun(t *testing.T) {
 		}
 	}
 	// A port-forward stream reaches the API server; exec-only (kubectl's proxy) refuses it.
-	pf := httptest.NewRequest(http.MethodPost, "/api/v1/namespaces/widgets/pods/db-0/portforward", nil)
+	pf := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/v1/namespaces/widgets/pods/db-0/portforward", nil)
 	pf.Header.Set("Upgrade", "SPDY/3.1")
 	pf.Header.Set("Connection", "Upgrade")
 	if why := (&kubeProxy{own: proxyOwnNS, protected: []string{"mainloop-toolbox"}, portForward: true}).refuse(pf); why != "" {
@@ -120,7 +125,7 @@ func TestExecKubeProxyRun(t *testing.T) {
 	if why := (&kubeProxy{own: proxyOwnNS}).refuse(pf); why == "" {
 		t.Error("kubectl's proxy lets port-forward through")
 	}
-	attach := httptest.NewRequest(http.MethodPost, "/api/v1/namespaces/widgets/pods/db-0/attach", nil)
+	attach := httptest.NewRequestWithContext(ctx, http.MethodPost, "/api/v1/namespaces/widgets/pods/db-0/attach", nil)
 	attach.Header.Set("Upgrade", "SPDY/3.1")
 	attach.Header.Set("Connection", "Upgrade")
 	if why := (&kubeProxy{own: proxyOwnNS, portForward: true}).refuse(attach); why == "" {

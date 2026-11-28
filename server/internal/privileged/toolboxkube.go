@@ -44,7 +44,7 @@ const (
 	scriptDir = "/run/exec"
 	// execKubeCreds is where the proxy's container mounts the run's credential, and execKubeDir the
 	// volume the proxy writes the kubeconfig to and the script's container reads it from.
-	execKubeCreds = "/run/exec-kube"
+	execKubeCreds = "/run/exec-kube" //nolint:gosec // a mount path, not a credential
 	execKubeDir   = "/run/kube"
 	// toolboxGrace is what a pod's deadline allows beyond the script's timeout: the image's pull
 	// counts against it, and so do the 5 seconds between the script's TERM and KILL.

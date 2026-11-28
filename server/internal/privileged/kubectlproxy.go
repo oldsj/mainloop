@@ -54,9 +54,9 @@ type kubeProxy struct {
 	// in-cluster Service (a database) that way.
 	portForward bool
 	preflight   bool
-	runToken  string
-	token     string
-	proxy     *httputil.ReverseProxy
+	runToken    string
+	token       string
+	proxy       *httputil.ReverseProxy
 	// tls serves a certificate made for this run (kubectl sends no token over plain HTTP); caPEM
 	// is that certificate, for kubectl's kubeconfig.
 	tls   *tls.Config
@@ -241,7 +241,7 @@ func (p *kubeProxy) refuse(r *http.Request) string {
 		return "admission policies and webhooks; change them through GitOps"
 	case a.group == "rbac.authorization.k8s.io" && write && (strings.HasPrefix(a.name, p.own+"-") || r.Method == http.MethodDelete && a.name == ""):
 		return "the executor's own roles and bindings"
-	case upgrade && a.sub != "exec" && !(p.portForward && a.sub == "portforward"):
+	case upgrade && a.sub != "exec" && (!p.portForward || a.sub != "portforward"):
 		return "a stream other than exec"
 	}
 	return ""

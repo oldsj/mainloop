@@ -218,3 +218,49 @@ func parseSSHHosts(list string) ([]SSHHost, error) {
 	}
 	return hosts, errors.Join(errs...)
 }
+
+// ExecKubeProxy is `mainloop exec-kube-proxy`'s settings (the sidecar of a command.exec run with
+// cluster reach): where the run's credential is mounted, where the kubeconfig goes, and the
+// namespaces no request may touch.
+type ExecKubeProxy struct {
+	Creds       string   `env:"MAINLOOP_EXEC_KUBE_CREDS" envDefault:"/run/exec-kube"`
+	Out         string   `env:"MAINLOOP_EXEC_KUBE_OUT" envDefault:"/run/kube"`
+	ProtectList string   `env:"MAINLOOP_EXEC_KUBE_PROTECT"`
+	Protect     []string `env:"-"`
+}
+
+// LoadExecKubeProxy reads and validates the sidecar's settings from the process environment.
+func LoadExecKubeProxy() (*ExecKubeProxy, error) { return ParseExecKubeProxy(nil) }
+
+// ParseExecKubeProxy reads the given variables; a nil map means the process environment.
+func ParseExecKubeProxy(vars map[string]string) (*ExecKubeProxy, error) {
+	p := &ExecKubeProxy{}
+	opts := env.Options{Environment: vars}
+	if vars == nil {
+		opts.Environment = environ()
+	}
+	if err := env.ParseWithOptions(p, opts); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	var errs []error
+	for _, ns := range strings.Split(p.ProtectList, ",") {
+		if ns = strings.TrimSpace(ns); ns == "" {
+			continue
+		}
+		if !dnsLabel.MatchString(ns) {
+			errs = append(errs, fmt.Errorf("MAINLOOP_EXEC_KUBE_PROTECT: %q is not a namespace name", ns))
+			continue
+		}
+		p.Protect = append(p.Protect, ns)
+	}
+	if len(p.Protect) == 0 {
+		errs = append(errs, errors.New("MAINLOOP_EXEC_KUBE_PROTECT must name the executor's and the toolbox's namespaces"))
+	}
+	if !filepath.IsAbs(p.Creds) || !filepath.IsAbs(p.Out) {
+		errs = append(errs, errors.New("MAINLOOP_EXEC_KUBE_CREDS and MAINLOOP_EXEC_KUBE_OUT must be absolute paths"))
+	}
+	if err := errors.Join(errs...); err != nil {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	return p, nil
+}

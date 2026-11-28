@@ -222,3 +222,18 @@ func TestParseExecutorToolboxProxy(t *testing.T) {
 		t.Fatalf("off by default: %q, %v", e.ToolboxProxyImage, err)
 	}
 }
+
+// The sidecar's settings: defaults for the mount paths, and the protected namespaces required.
+func TestParseExecKubeProxy(t *testing.T) {
+	p, err := config.ParseExecKubeProxy(map[string]string{"MAINLOOP_EXEC_KUBE_PROTECT": "mainloop-executor, mainloop-toolbox"})
+	if err != nil || p.Creds != "/run/exec-kube" || p.Out != "/run/kube" || !slices.Equal(p.Protect, []string{"mainloop-executor", "mainloop-toolbox"}) {
+		t.Fatalf("proxy = %+v, %v", p, err)
+	}
+	for _, vars := range []map[string]string{
+		{}, {"MAINLOOP_EXEC_KUBE_PROTECT": "Bad_NS"}, {"MAINLOOP_EXEC_KUBE_PROTECT": "x", "MAINLOOP_EXEC_KUBE_OUT": "run/kube"},
+	} {
+		if _, err := config.ParseExecKubeProxy(vars); err == nil {
+			t.Errorf("%v accepted", vars)
+		}
+	}
+}
