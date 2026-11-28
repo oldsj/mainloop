@@ -303,6 +303,8 @@ func (r *Runner) exec(ctx context.Context, row dbq.PrivilegedAction) outcome {
 		case err != nil:
 			return retry(err) // the next attempt finds the pod, or the started event
 		}
+	} else if err := r.extendLease(ctx, row, a.timeout()+toolboxPendingLimit); err != nil {
+		return retry(err) // an earlier attempt's pod: keep the claim while it is followed
 	}
 	return r.awaitExec(ctx, row, a)
 }

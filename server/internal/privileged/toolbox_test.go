@@ -423,10 +423,10 @@ func TestExecTagsAndExpiry(t *testing.T) {
 	e := newToolboxEnv(t, f)
 	plain := e.request(t, privileged.TypeExec, "plain", execArgs("dig example.org"))
 	risky := e.request(t, privileged.TypeExec, "risky", execArgs("pip install requests\ngh repo delete oldsj/scratch --yes\n"))
-	if got := plain.ExpiresAt.Sub(time.Now()); got < 23*time.Hour {
+	if got := time.Until(plain.ExpiresAt); got < 23*time.Hour {
 		t.Errorf("plain expires in %s", got)
 	}
-	if got := risky.ExpiresAt.Sub(time.Now()); got > time.Hour+time.Minute {
+	if got := time.Until(risky.ExpiresAt); got > time.Hour+time.Minute {
 		t.Errorf("destructive expires in %s", got)
 	}
 	e.runExecutor(t)

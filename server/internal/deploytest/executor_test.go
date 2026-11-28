@@ -527,7 +527,7 @@ func TestExecutorToolbox(t *testing.T) {
 		for _, s := range tc.set {
 			args = append(args, "--set", s)
 		}
-		out, err := exec.Command(helm, args...).CombinedOutput()
+		out, err := exec.CommandContext(t.Context(), helm, args...).CombinedOutput()
 		if err == nil || !strings.Contains(string(out), tc.want) {
 			t.Errorf("%s: err %v, output %.300s", name, err, out)
 		}
