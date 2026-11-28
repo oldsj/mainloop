@@ -610,3 +610,47 @@ func TestExecutorToolboxClusterReach(t *testing.T) {
 		}
 	}
 }
+
+// Run secrets are off unless executor.toolbox.secrets is on. On, the executor is told so and gets
+// the guard list, and the toolbox account may also read its Secrets back and make and delete
+// CiliumNetworkPolicies in the toolbox namespace; off, it may do neither.
+func TestExecutorToolboxSecrets(t *testing.T) {
+	roleRules := func(r rendered) []rbacv1.PolicyRule {
+		for _, ro := range r.roles {
+			if ro.Name == "mainloop-executor-toolbox" {
+				return ro.Rules
+			}
+		}
+		t.Fatal("no toolbox role")
+		return nil
+	}
+	off := render(t, "production-executor-toolbox")
+	if _, ok := envByName(off.deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])["MAINLOOP_EXECUTOR_TOOLBOX_SECRETS_ENABLED"]; ok {
+		t.Error("secrets are on without executor.toolbox.secrets")
+	}
+	for _, rule := range roleRules(off) {
+		if slices.Contains(rule.APIGroups, "cilium.io") || slices.Contains(rule.Resources, "secrets") && slices.Contains(rule.Verbs, "get") {
+			t.Errorf("the toolbox account has run-secret rights without executor.toolbox.secrets: %+v", rule)
+		}
+	}
+	on := render(t, "production-executor-toolbox-secrets")
+	env := envByName(on.deployments["mainloop-executor"].Spec.Template.Spec.Containers[0])
+	if env["MAINLOOP_EXECUTOR_TOOLBOX_SECRETS_ENABLED"].Value != "true" || env["MAINLOOP_EXECUTOR_TOOLBOX_GUARDED_ITEMS"].Value != "mainloop-executor-*,op-gate*,dns-admin" {
+		t.Errorf("env = %+v %+v", env["MAINLOOP_EXECUTOR_TOOLBOX_SECRETS_ENABLED"], env["MAINLOOP_EXECUTOR_TOOLBOX_GUARDED_ITEMS"])
+	}
+	var policies, secretGet bool
+	for _, rule := range roleRules(on) {
+		if slices.Contains(rule.APIGroups, "cilium.io") {
+			policies = slices.Equal(rule.Resources, []string{"ciliumnetworkpolicies"}) && slices.Equal(rule.Verbs, []string{"create", "delete"})
+		}
+		if slices.Contains(rule.Resources, "secrets") && slices.Equal(rule.Verbs, []string{"get"}) {
+			secretGet = true
+		}
+		if slices.Contains(rule.Verbs, "*") || slices.Contains(rule.Verbs, "patch") || slices.Contains(rule.Verbs, "update") {
+			t.Errorf("rule = %+v", rule)
+		}
+	}
+	if !policies || !secretGet {
+		t.Errorf("rules = %+v", roleRules(on))
+	}
+}

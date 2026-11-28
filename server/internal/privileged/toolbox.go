@@ -51,6 +51,10 @@ type ExecArgs struct {
 	Stdin          string `json:"stdin,omitempty"`
 	Reach          string `json:"reach"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	// Secrets are 1Password fields given to the run as files, and Hosts the only hosts it may reach
+	// then (docs/specs/privileged-actions.md).
+	Secrets []ExecSecret `json:"secrets,omitempty"`
+	Hosts   []string     `json:"hosts,omitempty"`
 }
 
 func (a ExecArgs) timeout() time.Duration {
@@ -88,6 +92,9 @@ func normalizeExec(raw json.RawMessage) (any, error) {
 		return nil, invalidf("stdin has a carriage return that does not end a line (\\r without \\n)")
 	case a.TimeoutSeconds < 0 || time.Duration(a.TimeoutSeconds)*time.Second > MaxCommandTimeout:
 		return nil, invalidf("timeout_seconds is 1 to %d (default %d)", int(MaxCommandTimeout.Seconds()), int(DefaultCommandTimeout.Seconds()))
+	}
+	if err := validateExecSecrets(a); err != nil {
+		return nil, err
 	}
 	// The card shows the real script, so a credential in it is refused rather than masked.
 	if redact.Credential(a.Script) {
@@ -135,8 +142,11 @@ type ExecFacts struct {
 	Image string `json:"image"`
 	Reach string `json:"reach"`
 	// ProxyImage is the kube proxy sidecar's image, for cluster reach.
-	ProxyImage string    `json:"proxy_image,omitempty"`
-	CheckedAt  time.Time `json:"checked_at"`
+	ProxyImage string `json:"proxy_image,omitempty"`
+	// Secrets and Hosts are frozen from the request: each secret's item metadata, never a value.
+	Secrets   []ExecSecretFact `json:"secrets,omitempty"`
+	Hosts     []string         `json:"hosts,omitempty"`
+	CheckedAt time.Time        `json:"checked_at"`
 }
 
 // ToolboxPhase is where a run's pod is.
@@ -162,6 +172,10 @@ type ToolboxSpec struct {
 	Script   string
 	Stdin    string
 	Timeout  time.Duration
+	// Secrets are the run's secret values by name, and Hosts the only hosts it may reach: the pod
+	// then carries the pinned reach label and its own network policy.
+	Secrets map[string][]byte
+	Hosts   []string
 }
 
 // ToolboxState is what the executor can observe of a run's pod.
@@ -194,6 +208,9 @@ type Toolbox interface {
 	Create(ctx context.Context, spec ToolboxSpec) error
 	// State reads the run's pod.
 	State(ctx context.Context, actionID string) (ToolboxState, error)
+	// RunSecrets reads the secret values the run holds, by name, for redaction. None for a run
+	// without secrets.
+	RunSecrets(ctx context.Context, actionID string) (map[string][]byte, error)
 	// Output reads what the run printed, stdout and stderr together, at most max bytes.
 	Output(ctx context.Context, actionID string, max int) ([]byte, error)
 	// Delete removes the run's pod and its Secrets; a missing one is not an error.
@@ -222,6 +239,11 @@ func preflightExec(ctx context.Context, s *Service, raw json.RawMessage, now tim
 	if a.Reach == ReachCluster {
 		f.ProxyImage = s.ToolboxProxyImage
 	}
+	secrets, err := preflightExecSecrets(ctx, s, a)
+	if err != nil {
+		return nil, err
+	}
+	f.Secrets, f.Hosts = secrets, a.Hosts
 	return f, nil
 }
 
@@ -253,7 +275,9 @@ func renderExec(r dbq.PrivilegedAction, ctx map[string]any) (string, string, map
 	if a.Stdin != "" {
 		b.WriteString("With this on its stdin:\n" + fenced("", a.Stdin))
 	}
-	if f.Reach == ReachCluster {
+	if len(f.Secrets) > 0 {
+		b.WriteString("\nIt can reach only the hosts below (and DNS for them): no other address, not the cluster, not the home network. ")
+	} else if f.Reach == ReachCluster {
 		b.WriteString("\nIt reaches the Kubernetes API as cluster-admin, through a proxy sidecar (" + shortDigest(f.ProxyImage) + ") that alone holds " +
 			"a token minted for this run: the script's kubeconfig names only the proxy. The proxy refuses Secrets, impersonation, token requests, " +
 			"admission policies and webhooks, the proxy subresources, and the executor's and the toolbox's namespaces; exec and port-forward " +
@@ -265,7 +289,21 @@ func renderExec(r dbq.PrivilegedAction, ctx map[string]any) (string, string, map
 	b.WriteString("Nothing can preview it: nothing has run. ")
 	b.WriteString("There is no retry: if the outcome is lost, it is uncertain and the script is not run again. ")
 	b.WriteString("Its output (exit code, stdout and stderr together, redacted and bounded) goes back to the agent and is stored with the action.")
+	if len(f.Secrets) > 0 {
+		b.WriteString("\nIt is given these 1Password fields as files in /run/secrets (never an environment variable); its network is the hosts " +
+			"below and nothing else, and its script is shown above, so these are the only places it can send them:\n")
+		for _, s := range f.Secrets {
+			it := s.Item
+			fmt.Fprintf(&b, "- /run/secrets/%s: %q field %q of item %q (version %d, last edited %s)\n", s.Name, it.VaultTitle, it.FieldTitle, it.ItemTitle,
+				it.Version, it.UpdatedAt.UTC().Format("2006-01-02 15:04 UTC"))
+		}
+		fmt.Fprintf(&b, "Hosts it may reach (port 443, and DNS for them): %s.\n", strings.Join(f.Hosts, ", "))
+		b.WriteString("The values never appear on this card; the output is cleaned of them exactly before it is stored or returned.\n")
+	}
 	tags := []string{"toolbox", "reach: " + f.Reach}
+	for _, s := range f.Secrets {
+		tags = append(tags, "uses "+s.Item.ItemTitle+"/"+s.Item.FieldTitle+"; can send it to "+strings.Join(f.Hosts, ", "))
+	}
 	if f.Reach == ReachCluster {
 		tags = append(tags, "cluster-admin")
 	}
@@ -311,6 +349,24 @@ func (r *Runner) exec(ctx context.Context, row dbq.PrivilegedAction) outcome {
 			return outcome{state: StateStale, err: "the toolbox image or its proxy changed since the owner saw it (" + shortDigest(f.Image) +
 				", now " + shortDigest(r.ToolboxImage) + "); nothing ran"}
 		}
+		var values map[string][]byte
+		defer func() {
+			for _, v := range values {
+				clear(v)
+			}
+		}()
+		if len(f.Secrets) > 0 {
+			if !r.ToolboxSecrets || r.OnePassword == nil {
+				return outcome{state: StateFailed, err: "this executor's toolbox no longer takes secrets; nothing ran"}
+			}
+			var why string
+			var err error
+			if values, why, err = r.readExecSecrets(ctx, f.Secrets); err != nil {
+				return retry(err) // nothing made yet
+			} else if why != "" {
+				return outcome{state: StateStale, err: why + "; nothing ran"}
+			}
+		}
 		if err := r.extendLease(ctx, row, a.timeout()+toolboxPendingLimit); err != nil {
 			return retry(err)
 		}
@@ -319,6 +375,7 @@ func (r *Runner) exec(ctx context.Context, row dbq.PrivilegedAction) outcome {
 		}
 		err := r.Toolbox.Create(ctx, ToolboxSpec{
 			ActionID: row.ID, Image: f.Image, ProxyImage: f.ProxyImage, Reach: a.Reach, Script: a.Script, Stdin: a.Stdin, Timeout: a.timeout(),
+			Secrets: values, Hosts: f.Hosts,
 		})
 		var before *NothingRan
 		switch {
@@ -391,6 +448,17 @@ func (r *Runner) execOutcome(ctx context.Context, row dbq.PrivilegedAction, a Ex
 		return retry(err)
 	}
 	out.Stdout = b
+	if len(a.Secrets) > 0 {
+		// What the run held is read back from its own Secret, so a value rotated since is still removed.
+		held, err := r.Toolbox.RunSecrets(ctx, row.ID)
+		if err != nil {
+			return retry(err) // never store output that may carry a value we cannot remove
+		}
+		out.Credentials = redactions(held)
+		for _, v := range held {
+			clear(v)
+		}
+	}
 	switch {
 	case st.Reason == "DeadlineExceeded", st.Phase == ToolboxExited && (st.ExitCode == 124 || st.ExitCode == 137) && st.Reason != "OOMKilled":
 		out.TimedOut = true

@@ -76,6 +76,13 @@ var installs = map[string]struct {
 		"executor.toolbox.enabled=true", "executor.toolbox.clusterReach=true",
 		"executor.toolbox.image=ghcr.io/oldsj/mainloop-toolbox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	}},
+	// The toolbox with run secrets: each such run gets a network policy of its own, which the
+	// toolbox account makes.
+	"production-executor-toolbox-secrets": {"mainloop", "ci/production-values.yaml", []string{
+		"executor.enabled=true", "executor.namespace=mainloop-executor", "executor.approvals.mode=web", "executor.toolbox.enabled=true",
+		"executor.toolbox.image=ghcr.io/oldsj/mainloop-toolbox@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		"executor.toolbox.secrets.enabled=true", "executor.toolbox.secrets.guardedItems={mainloop-executor-*,op-gate*,dns-admin}",
+	}},
 	// The same, with http.unifi on.
 	"production-executor-unifi": {"mainloop", "ci/production-values.yaml", []string{
 		"executor.enabled=true", "executor.approvals.mode=web", "executor.namespace=mainloop-executor", "executor.unifi.enabled=true",

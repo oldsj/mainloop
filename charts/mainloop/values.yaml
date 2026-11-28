@@ -399,6 +399,16 @@ executor:
     # exec-kube-proxy`) that alone holds a token minted for the run. Needs executor.kubernetes (the
     # token is for its admin account) and a pull secret for the executor's image if it is private.
     clusterReach: false
+    # Run secrets: a request may name 1Password fields (op://kubernetes/<item>/<field>) that the run
+    # gets as files in /run/secrets, and the hosts it may then reach: each such run has a
+    # CiliumNetworkPolicy of its own (DNS for those hosts, TCP 443 to them, nothing else), made by
+    # the toolbox account in this namespace and deleted with the run. Needs Cilium's DNS proxy and
+    # its CiliumNetworkPolicy CRD. guardedItems are item-title globs no run may take; empty is the
+    # default list (mainloop-executor-*, op-gate*, op-connect*, op-credentials*, onepassword*,
+    # 1password*): a name rule, so review it with these values.
+    secrets:
+      enabled: false
+      guardedItems: []
     # Secrets in the toolbox namespace that the image's registry needs, if it is private.
     imagePullSecrets: []
   nodeSelector: {}

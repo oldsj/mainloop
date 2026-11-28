@@ -184,6 +184,12 @@ spec:
             - name: MAINLOOP_EXECUTOR_TOOLBOX_PROXY_IMAGE
               value: {{ include "mainloop.image" (dict "image" $image "root" $) | quote }}
             {{- end }}
+            {{- if .toolbox.secrets.enabled }}
+            - name: MAINLOOP_EXECUTOR_TOOLBOX_SECRETS_ENABLED
+              value: "true"
+            - name: MAINLOOP_EXECUTOR_TOOLBOX_GUARDED_ITEMS
+              value: {{ join "," .toolbox.secrets.guardedItems | quote }}
+            {{- end }}
             - name: MAINLOOP_EXECUTOR_TOOLBOX_PULL_SECRETS
               value: {{ join "," .toolbox.imagePullSecrets | quote }}
             {{- end }}
@@ -496,6 +502,15 @@ rules:
   - apiGroups: ['']
     resources: [secrets]
     verbs: [create, list, delete]
+  {{- if .toolbox.secrets.enabled }}
+  # A run with secrets: its values, read back to clean its output, and its own network policy.
+  - apiGroups: ['']
+    resources: [secrets]
+    verbs: [get]
+  - apiGroups: [cilium.io]
+    resources: [ciliumnetworkpolicies]
+    verbs: [create, delete]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

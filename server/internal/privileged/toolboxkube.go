@@ -6,14 +6,19 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -39,7 +44,11 @@ const (
 	proxyContainer   = "kube-proxy"
 	// kubeSecretSuffix names a cluster-reach run's credential Secret, beside the script's.
 	kubeSecretSuffix = "-kube"
-	toolboxUID       = 65532
+	// secretsSecretSuffix names a secrets run's values, mounted at /run/secrets.
+	secretsSecretSuffix = "-secrets"
+	// secretsDir is where the script's container finds each secret, as a file named after it.
+	secretsDir = "/run/secrets"
+	toolboxUID = 65532
 	// scriptDir holds the run's script and stdin, from the run's Secret.
 	scriptDir = "/run/exec"
 	// execKubeCreds is where the proxy's container mounts the run's credential, and execKubeDir the
@@ -60,13 +69,19 @@ type KubeToolbox struct {
 	// PullSecrets name Secrets in Namespace that the image's registry needs.
 	PullSecrets []string
 	Client      kubernetes.Interface
+	// Policies is set when the toolbox takes secrets: each such run has a CiliumNetworkPolicy the
+	// toolbox account makes and deletes.
+	Policies bool
+	// Dynamic makes a secrets run's CiliumNetworkPolicy; replaces minting it (tests).
+	Dynamic dynamic.Interface
 	// AdminCredential, if set, replaces minting the cluster-admin credential of a cluster-reach run
 	// through Clients (tests).
 	AdminCredential func(ctx context.Context, lifetime time.Duration) (KubeCredential, error)
 
-	mu      sync.Mutex
-	minted  kubernetes.Interface
-	expires time.Time
+	mu        sync.Mutex
+	minted    kubernetes.Interface
+	mintedDyn dynamic.Interface
+	expires   time.Time
 }
 
 const toolboxTokenLife = 20 * time.Minute
@@ -89,8 +104,62 @@ func (k *KubeToolbox) client(ctx context.Context) (kubernetes.Interface, error) 
 	if err != nil {
 		return nil, fmt.Errorf("toolbox client: %w", err)
 	}
-	k.minted, k.expires = c, time.Now().Add(toolboxTokenLife)
+	d, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("toolbox client: %w", err)
+	}
+	k.minted, k.mintedDyn, k.expires = c, d, time.Now().Add(toolboxTokenLife)
 	return c, nil
+}
+
+// dyn returns the dynamic client for the toolbox account (made with client's token).
+func (k *KubeToolbox) dyn(ctx context.Context) (dynamic.Interface, error) {
+	if k.Dynamic != nil {
+		return k.Dynamic, nil
+	}
+	if _, err := k.client(ctx); err != nil {
+		return nil, err
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.mintedDyn, nil
+}
+
+var policyGVR = schema.GroupVersionResource{Group: "cilium.io", Version: "v2", Resource: "ciliumnetworkpolicies"}
+
+// hostsPolicy is a secrets run's network policy, selecting its pod alone: DNS for the run's hosts,
+// and TCP 443 to them. The pod carries the pinned reach label, which no deployment policy opens.
+func hostsPolicy(name, ns, actionID string, labels map[string]string, hosts []string) *unstructured.Unstructured {
+	dnsRules, fqdns := []any{}, []any{}
+	for _, h := range hosts {
+		dnsRules = append(dnsRules, map[string]any{"matchName": h})
+		fqdns = append(fqdns, map[string]any{"matchName": h})
+	}
+	ls := map[string]any{}
+	for k, v := range labels {
+		ls[k] = v
+	}
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "cilium.io/v2", "kind": "CiliumNetworkPolicy",
+		"metadata": map[string]any{"name": name, "namespace": ns, "labels": ls},
+		"spec": map[string]any{
+			"endpointSelector": map[string]any{"matchLabels": map[string]any{labelAction: actionID}},
+			"ingress":          []any{},
+			"egress": []any{
+				map[string]any{
+					"toEndpoints": []any{map[string]any{"matchLabels": map[string]any{"k8s:io.kubernetes.pod.namespace": "kube-system", "k8s-app": "kube-dns"}}},
+					"toPorts": []any{map[string]any{
+						"ports": []any{map[string]any{"port": "53", "protocol": "UDP"}, map[string]any{"port": "53", "protocol": "TCP"}},
+						"rules": map[string]any{"dns": dnsRules},
+					}},
+				},
+				map[string]any{
+					"toFQDNs": fqdns,
+					"toPorts": []any{map[string]any{"ports": []any{map[string]any{"port": "443", "protocol": "TCP"}}}},
+				},
+			},
+		},
+	}}
 }
 
 // KubeCredential is what a cluster-reach run's proxy needs: a cluster-admin token minted for the
@@ -151,7 +220,11 @@ func (k *KubeToolbox) Create(ctx context.Context, spec ToolboxSpec) error {
 		return err
 	}
 	name := execPodName(spec.ActionID)
-	labels := runLabels(spec.ActionID, spec.Reach)
+	reach := spec.Reach
+	if len(spec.Secrets) > 0 {
+		reach = reachPinned
+	}
+	labels := runLabels(spec.ActionID, reach)
 	secret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: k.ns(), Labels: labels},
 		Type:       corev1.SecretTypeOpaque,
@@ -164,6 +237,35 @@ func (k *KubeToolbox) Create(ctx context.Context, spec ToolboxSpec) error {
 		// No pod will read them.
 		_ = c.CoreV1().Secrets(k.ns()).Delete(ctx, name, metav1.DeleteOptions{})
 		_ = c.CoreV1().Secrets(k.ns()).Delete(ctx, name+kubeSecretSuffix, metav1.DeleteOptions{})
+		_ = c.CoreV1().Secrets(k.ns()).Delete(ctx, name+secretsSecretSuffix, metav1.DeleteOptions{})
+		if d, err := k.dyn(ctx); err == nil && len(spec.Secrets) > 0 {
+			_ = d.Resource(policyGVR).Namespace(k.ns()).Delete(ctx, name, metav1.DeleteOptions{})
+		}
+	}
+	if len(spec.Secrets) > 0 {
+		// The values and the only hosts they may go to, before the pod that reads them: the policy
+		// first, so the pod never starts with more network than it was approved.
+		d, err := k.dyn(ctx)
+		if err != nil {
+			cleanup()
+			return err
+		}
+		if _, err := d.Resource(policyGVR).Namespace(k.ns()).Create(ctx, hostsPolicy(name, k.ns(), spec.ActionID, labels, spec.Hosts), metav1.CreateOptions{FieldManager: FieldManager}); err != nil && !apierrors.IsAlreadyExists(err) {
+			cleanup()
+			return created(err)
+		}
+		data := map[string][]byte{}
+		for n, v := range spec.Secrets {
+			data[n] = slices.Clone(v)
+		}
+		vals := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: name + secretsSecretSuffix, Namespace: k.ns(), Labels: labels},
+			Type:       corev1.SecretTypeOpaque, Data: data,
+		}
+		if _, err := c.CoreV1().Secrets(k.ns()).Create(ctx, vals, metav1.CreateOptions{FieldManager: FieldManager}); err != nil && !apierrors.IsAlreadyExists(err) {
+			cleanup()
+			return created(err)
+		}
 	}
 	if spec.Reach == ReachCluster {
 		// The token outlives the pod's own deadline, so it cannot expire under the script.
@@ -226,6 +328,11 @@ func (k *KubeToolbox) pod(name string, labels map[string]string, spec ToolboxSpe
 		{Name: "work", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: resource.NewQuantity(1<<30, resource.BinarySI)}}},
 		{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: resource.NewQuantity(256<<20, resource.BinarySI)}}},
 		{Name: "exec", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: name, DefaultMode: new(int32(0o444))}}},
+	}
+	if len(spec.Secrets) > 0 {
+		mounts = append(mounts, corev1.VolumeMount{Name: "run-secrets", MountPath: secretsDir, ReadOnly: true})
+		volumes = append(volumes, corev1.Volume{Name: "run-secrets", VolumeSource: corev1.VolumeSource{
+			Secret: &corev1.SecretVolumeSource{SecretName: name + secretsSecretSuffix, DefaultMode: new(int32(0o444))}}})
 	}
 	var sidecars []corev1.Container
 	if spec.Reach == ReachCluster {
@@ -381,6 +488,19 @@ func (k *KubeToolbox) Output(ctx context.Context, actionID string, max int) ([]b
 	return io.ReadAll(io.LimitReader(rc, lim))
 }
 
+// RunSecrets reads the values the run holds from its own Secret.
+func (k *KubeToolbox) RunSecrets(ctx context.Context, actionID string) (map[string][]byte, error) {
+	c, err := k.client(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s, err := c.CoreV1().Secrets(k.ns()).Get(ctx, execPodName(actionID)+secretsSecretSuffix, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return s.Data, nil
+}
+
 // Delete removes the run's pod and Secret.
 func (k *KubeToolbox) Delete(ctx context.Context, actionID string) error {
 	c, err := k.client(ctx)
@@ -392,8 +512,17 @@ func (k *KubeToolbox) Delete(ctx context.Context, actionID string) error {
 	if err := c.CoreV1().Pods(k.ns()).Delete(ctx, name, metav1.DeleteOptions{GracePeriodSeconds: &grace}); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
-	for _, secret := range []string{name, name + kubeSecretSuffix} {
+	for _, secret := range []string{name, name + kubeSecretSuffix, name + secretsSecretSuffix} {
 		if err := c.CoreV1().Secrets(k.ns()).Delete(ctx, secret, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	if k.Policies {
+		d, err := k.dyn(ctx)
+		if err != nil {
+			return err
+		}
+		if err := d.Resource(policyGVR).Namespace(k.ns()).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err) {
 			return err
 		}
 	}
